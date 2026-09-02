@@ -1,0 +1,24 @@
+{
+  "name": "torrente_online_nfo_parser",
+  "version": "1.0.0",
+  "description": "requeriment node v20.19.4. <br>\r node index.js nombredelnfo.NFO<br>\r Es necesario tener el fichero .NFO en la carpeta nfos dentro del proyecto<br>",
+  "homepage": "https://github.com/srXendo/torrente_online_nfos_parser#readme",
+  "bugs": {
+    "url": "https://github.com/srXendo/torrente_online_nfos_parser/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/srXendo/torrente_online_nfos_parser.git"
+  },
+  "license": "ISC",
+  "author": "SrXendo",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "^4.4.2"
+  }
+}

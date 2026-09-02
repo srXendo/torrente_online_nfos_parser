@@ -1,10 +1,28 @@
 const fs = require('fs');
-const exportObj = {
+let exportObj = {
     vertex: [],
     faces: [],
+    bones: [],
     is_touch: false,
     counter: 0
 }
+const AXIS_MATRICES = {
+    none: [
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+    ],
+
+    // rotate +90 about X: source Z-up -> glTF Y-up
+    z_up_to_y_up: [
+        [1, 0,  0, 0],
+        [0, 0, -1, 0],
+        [0, 1,  0, 0],
+        [0, 0,  0, 1]
+    ]
+};
+const exportsArr = [];
 class VtStream {
     constructor(bufferSize, buffer) {
         this.bufferSize = bufferSize;   // Offset +16 (stream_ptr + 4 en dwords)
@@ -222,21 +240,7 @@ class VtFFChunk {
     }
 }
 
-// ==================================================
-// TRADUCCIÓN DEL BUCLE RAÍZ: vtNFO_NFO::Read
-// ==================================================
-const inputFile = process.argv[2] ? `${process.argv[2]}` : './nfos/Cuchillo.NFO';
-const fileBuffer = fs.readFileSync(inputFile);
 
-const vtffStream = new VtStream(fileBuffer.length, fileBuffer);
-
-// Este objeto simula el parámetro "a2" original de C++ que se le pasa a vtNFO_NFO::Read.
-// Representa el archivo físico completo y su inicio en 0.
-const fileContainer = {
-    streamPtr: vtffStream,
-    headerPos: 0,
-    chunkSize: fileBuffer.length // Crucial para que start_pos_new_chunk no se vuelva NaN
-};
 // ============================================================================
 // TRADUCCIÓN LITERAL DE sub_10043040 (OBJ1) EN NODE.JS
 // ============================================================================
@@ -259,13 +263,13 @@ function sub_10043040(chunkParent) {
     const matrixCount = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
     v29.dataPos += 4;
     
-    const track1Count = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
+    const materialCount = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
     v29.dataPos += 4;
     
-    const track2Count = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
+    const boneCount = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
     v29.dataPos += 4;
     
-    const unknownVal = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
+    const meshCount = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
     v29.dataPos += 4;
 
     // 4. vtFFChunk::Read(..., Buffer + 32, 0x40u); -> Saltamos 64 bytes de padding/reservado
@@ -277,85 +281,305 @@ function sub_10043040(chunkParent) {
     let v28 = 0; // contador TRA1
     let v27 = 0; // contador MTR1
 
+    let v14 = 0; // Aritmética de punteros para TRA1 (equivale a v14 += 96 en C++)  
     // 5. if ( vtFFChunk::Next(v29) != 0 ) do { ... } while ( vtFFChunk::Next(v29) != 0 );
+    const lodsArr = []
+    const bonesArr = []
     while (v29.next() !== 0) {
         const chunkId = v29.chunkId;
 
         if (chunkId === 'CSTR') {
             // Manejado según el flujo original
+
         } 
         else if (chunkId === 'MTR1') {
+            console.log(`[OBJ1] SubProcesando MTR1 #${v27}`);
             if (v27 < mtrCount) {
-                console.log(`[OBJ1] Procesando MTR1 #${v27}`);
+                console.log(`[OBJ1] SubProcesando MTR1 #${v27}`);
                 // sub_100439D0(...)
                 v27++;
             }
         } 
         else if (chunkId === 'TRA1') {
-            if (v28 < track1Count + track2Count) {
-                console.log(`[OBJ1] Procesando TRA1 (Transformación/Hueso) #${v28}`);
-                
-                // vtFFChunk::vtFFChunk(v33, v29);
+            if (v28 < materialCount + boneCount) {
+                console.log(`[OBJ1] SubProcesando TRA1 (Transformación/Hueso) #${v28}`);
+// if ( v28 < *((_DWORD *)Buffer + 4) + *((_DWORD *)Buffer + 5) )
+
+                // vtFFChunk::vtFFChunk(this: (vtFFChunk *)v33, a2: (struct vtFFChunk *)v29);
                 const v33 = new VtFFChunk(v29);
+
+                // Simulación del puntero de estructura TRA1 en memoria
+                const v17 = { data: Buffer.alloc(100), 20: null };
+
+                // if ( vtFFChunk::FindFirst(this: (vtFFChunk *)v33, a2: aCstr) )
+                if (v33.findFirst('CSTR') === 1) {
+                    const cstrSize = v33.chunkSize - 8;
+                    const v18 = v33.streamPtr.readAbsolute(v33.dataPos, cstrSize);
+                    v17[20] = v18; // v17[20] = v18;
+
+                    console.log("nombre hueso: ", v18.toString('ascii'))
+
+                    // vtFFChunk::Read(this: (vtFFChunk *)v33, Buffer: v18, a3: v22); (Ya leído mediante readAbsolute)
+                } else {
+                    v17[20] = 0;
+                }
+
+                // if ( !vtFFChunk::FindFirst(this: (vtFFChunk *)v33, a2: aInfo) )
+                if (v33.findFirst('INFO') === 0) {
+                    throw new Error("CHUNK INFO NO ENCONTRADO EN TRA1 (Exception 523)");
+                }
+
+                // vtFFChunk::Read(this: (vtFFChunk *)v33, Buffer: v17, a3: 0x40u);
+                const trMatrixData = v33.streamPtr.readAbsolute(v33.dataPos, 0x40);
+
+                    
+                v33.dataPos += 0x40;
                 
-                // vtFFChunk::FindFirst(v33, aCstr)
-                // vtFFChunk::FindFirst(v33, aInfo)
-                // vtFFChunk::Read(v33, v17, 0x40u);
-                // vtFFChunk::Read(v33, v17 + 16, 4u);
-                
+
+                // vtFFChunk::Read(this: (vtFFChunk *)v33, Buffer: v17 + 16, a3: 4u);
+                const parentId = v33.streamPtr.readAbsolute(v33.dataPos, 4).readUInt32LE(0);
+                v33.dataPos += 0x04;
+                console.log("parentId", parentId)
+                let row = []
+                const result = []
+                for (let i = 0; i < trMatrixData.length / 4; i++) {
+                    
+                    row.push(trMatrixData.readFloatLE(i * 4));
+                    if(row.length >= 3){
+                        result.push(row)
+                        row = []
+                        console.log("trMatrixData.readFloatLE(i * 4)",result)
+                    }
+                    
+                }
+                bonesArr.push({
+                    nameBone: v17[20].toString('ascii'),
+                    matrix: trMatrixData,
+                    parentId: parentId === 0xFFFFFFFF ? -1 : parentId
+                })
+
+                exportObj.bones.push({
+                    nameBone: v17[20].toString('ascii'),
+                    matrix: trMatrixData,
+                    parentId: parentId === 0xFFFFFFFF ? -1 : parentId
+                })   
+                console.log("bones_matrix: ", trMatrixData.toString('hex'))
+                v33.dataPos += 4;
+
+                v14 += 96;
                 v28++;
+            
             }
         } 
         else if (chunkId === 'LOD1') {
             if (v26 < bufferCount) {
-                console.log(`[OBJ1] Procesando LOD1 (Malla Geométrica) #${v26}`);
-                sub_10043D80(v29, 'MSH1')
+                console.log(`[OBJ1] SubProcesando LOD1 (Malla Geométrica) #${v26}`);
+                const lodRow = sub_10043D80(v29, 'MSH1',lodsArr.length)
+                lodsArr.push(lodRow)
                 v26++;
             }
         } 
         else if (chunkId === 'BOX1') {
             if (v24 < bufferCount) {
-                console.log(`[OBJ1] Procesando BOX1 (Bounding Box) #${v24}`);
-                // vtFFChunk::Read x 3 (4u, 4u, 0x60u)
+                if (!exportObj.boxes) exportObj.boxes = [];
+                
+                const boxData = {};
+                
+                // vtFFChunk::Read(this: (vtFFChunk *)v29, Buffer: (void *)v19, a3: 4u);
+                boxData.val0 = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
+                v29.dataPos += 4;
+                
+                // vtFFChunk::Read(this: (vtFFChunk *)v29, Buffer: (void *)(v19 + 4), a3: 4u);
+                boxData.val1 = v29.streamPtr.readAbsolute(v29.dataPos, 4).readUInt32LE(0);
+                v29.dataPos += 4;
+                
+                // vtFFChunk::Read(this: (vtFFChunk *)v29, Buffer: (void *)(v19 + 8), a3: 0x60u);
+                // 96 bytes = 24 floats
+                boxData.buffer96 = v29.streamPtr.readAbsolute(v29.dataPos, 0x60);
+                v29.dataPos += 0x60;
+                
+                exportObj.boxes.push(boxData);
+                
+                console.log(`[OBJ1] SubProcesando BOX1 #${v24} | val0: ${boxData.val0}, val1: ${boxData.val1}`);
+                
+                // Vamos a imprimir los floats del PRIMER elemento para ver qué demonios hay dentro
+                if (v24 === 0) {
+
+                }
+                
                 v24++;
             }
         } 
         else if (chunkId === 'PHY1') {
-            console.log(`[OBJ1] Procesando PHY1 (Físicas)`);
-            // sub_10044BB0(...)
+            console.log(`[OBJ1] SubProcesando PHY1 (Físicas)`);
+            
+            // Creamos un objeto para almacenar el resultado y lo asignamos al exportObj principal
+            const phyBuffer = {};
+            exportObj.phyData = phyBuffer;
+
+            // Llamada estricta replicando: sub_10044BB0(Buffer: v20, a2: (struct vtFFChunk *)v29);
+            sub_10044BB0(phyBuffer, v29);
         }
+       
     }
-}
-// if ( *(_DWORD *)a2->chunk_id != *(_DWORD *)aVtff )
-const magicStr = vtffStream.readAbsolute(fileContainer.headerPos, 4).toString('ascii');
-if (magicStr !== 'VTFF') {
-    throw new Error("El archivo no es un VTFF válido (Firma errónea).");
-}
-
-// vtFFChunk::vtFFChunk(this: &v50, a2);
-const v50 = new VtFFChunk(fileContainer);
-
-// if ( *(_DWORD *)v50.chunk_id != *(_DWORD *)aInfo )
-if (v50.chunkId !== 'INFO') {
-    throw new Error(`CHUNK no esperado: ${v50.chunkId}`);
-}
-
-console.log("¡Cabecera INFO y VTFF verificadas correctamente!");
-
-// while ( vtFFChunk::Next(this: &v50) != 0 )
-while (v50.next() !== 0) {
-    console.log(`[RAÍZ] Identificado Chunk: ${v50.chunkId} | Tamaño reservado: ${v50.chunkSize} bytes`);
+    const meshes = []
     
-    if (v50.chunkId === 'OBJ1') {
-        console.log(">>> Entrando a sub_10043040(v50) ...");
-        sub_10043040(v50)
-        // Aquí llamarás a tu implementación de sub_10043040 pasando 'v50'
+    for(let i = 0; i < lodsArr.length; i++){
+        let meshOrder = 0
+        for(let x = 0; x < lodsArr[i].length; x++){
+            
+            let mesh = {
+                lodIndex: i,
+                nodeIdx: lodsArr[i][x].nodeIdx,
+                positions: lodsArr[i][x].positions,
+                skinGroups: lodsArr[i][x].skinGroups
+            }
+            console.log("mesh.nodeIdx: ", mesh.nodeIdx)
+            if (mesh.nodeIdx < bonesArr.length){
+                mesh.name = bonesArr[mesh.nodeIdx].nameBone
+            }else{
+                mesh.name = `mesh_lod${i}_${meshOrder}`
+            }
+            
+            meshes.push(mesh)
+            meshOrder+=1
+            console.log("mesh name: ", mesh.name)
+        }
+
     }
+    return {meshes: meshes, bonesArr: bonesArr, materialCount: materialCount, boneCount: boneCount, meshCount: meshCount}
 }
 
+// ============================================================================
+// TRADUCCIÓN LITERAL DE sub_10044BB0 (Procesador de PHY1)
+// ============================================================================
+function sub_10044BB0(phyBuffer, a2) {
+    // vtFFChunk::vtFFChunk(this: (vtFFChunk *)v16, a2);
+    const v16 = new VtFFChunk(a2);
 
+    let v13 = 0; // Contador JNT1
+    let v14 = 0; // Contador LNK1
+
+    // if ( v16[3] != *(_DWORD *)aInfo )
+    if (v16.chunkId !== 'INFO') {
+        throw new Error("CHUNK INFO NO ENCONTRADO EN PHY1 (Exception 922)");
+    }
+
+    // vtFFChunk::Read(..., Buffer, 4u);
+    phyBuffer.numJnt = v16.streamPtr.readAbsolute(v16.dataPos, 4).readUInt32LE(0); 
+    v16.dataPos += 4;
+
+    // vtFFChunk::Read(..., Buffer + 4, 4u);
+    phyBuffer.numLnk = v16.streamPtr.readAbsolute(v16.dataPos, 4).readUInt32LE(0); 
+    v16.dataPos += 4;
+
+    // vtFFChunk::Read(..., Buffer + 8, 4u);
+    phyBuffer.unkCount1 = v16.streamPtr.readAbsolute(v16.dataPos, 4).readUInt32LE(0); 
+    v16.dataPos += 4;
+
+    // vtFFChunk::Read(..., Buffer + 12, 4u);
+    phyBuffer.unkCount2 = v16.streamPtr.readAbsolute(v16.dataPos, 4).readUInt32LE(0); 
+    v16.dataPos += 4;
+
+    // v5 = malloc(Size: 4 * *((_DWORD *)Buffer + 2)); ... vtFFChunk::Read(..., v5, v11);
+    const sizeUnk = 4 * phyBuffer.unkCount1;
+    if (sizeUnk > 0) {
+        phyBuffer.unkData = v16.streamPtr.readAbsolute(v16.dataPos, sizeUnk);
+        v16.dataPos += sizeUnk;
+    } else {
+        phyBuffer.unkData = null;
+    }
+
+    // *((_DWORD *)Buffer + 5) = operator new(a1: 20 * *(_DWORD *)Buffer + 4);
+    // Reservamos el array de 20 bytes por elemento (JNT1)
+    phyBuffer.joints = new Array(phyBuffer.numJnt).fill(null).map(() => ({}));
+
+    // *((_DWORD *)Buffer + 6) = operator new(a1: 52 * *v4);
+    // Reservamos el array de 52 bytes por elemento (LNK1)
+    phyBuffer.links = new Array(phyBuffer.numLnk).fill(null).map(() => ({}));
+
+    // if ( vtFFChunk::Next(this: (vtFFChunk *)v16) != 0 )
+    if (v16.next() !== 0) {
+        do {
+            const chunkId = v16.chunkId;
+
+            // if ( v16[3] == *(_DWORD *)aJnt1 && v13 < *(_DWORD *)Buffer )
+            if (chunkId === 'JNT1' && v13 < phyBuffer.numJnt) {
+                const jnt = phyBuffer.joints[v13];
+
+                // vtFFChunk::Read(..., v8, 4u);
+                jnt.val0 = v16.streamPtr.readAbsolute(v16.dataPos, 4).readUInt32LE(0); v16.dataPos += 4;
+                // vtFFChunk::Read(..., v8 + 1, 4u);
+                jnt.val1 = v16.streamPtr.readAbsolute(v16.dataPos, 4).readUInt32LE(0); v16.dataPos += 4;
+                // vtFFChunk::Read(..., v8 + 2, 4u);
+                jnt.val2 = v16.streamPtr.readAbsolute(v16.dataPos, 4).readUInt32LE(0); v16.dataPos += 4;
+                // vtFFChunk::Read(..., v8 + 3, 4u);
+                jnt.val3_count = v16.streamPtr.readAbsolute(v16.dataPos, 4).readUInt32LE(0); v16.dataPos += 4;
+
+                // v10 = malloc(Size: 4 * *v9); vtFFChunk::Read(..., v8, v12);
+                const extraSize = 4 * jnt.val3_count;
+                if (extraSize > 0) {
+                    jnt.extraData = v16.streamPtr.readAbsolute(v16.dataPos, extraSize);
+                    v16.dataPos += extraSize;
+                } else {
+                    jnt.extraData = null;
+                }
+
+                console.log(`[PHY1] Extrayendo JNT1 #${v13}`);
+                v13++;
+            }
+            // else if ( v16[3] == *(_DWORD *)aLnk1 && v14 < *v4 )
+            else if (chunkId === 'LNK1' && v14 < phyBuffer.numLnk) {
+                console.log(`[PHY1] Extrayendo LNK1 #${v14}`);
+                // sub_10044FA0(Buffer: (void *)(v15 + *((_DWORD *)Buffer + 6)), a2: (vtFFChunk *)v16);
+                sub_10044FA0(phyBuffer.links[v14], v16);
+                v14++;
+            }
+        } while (v16.next() !== 0);
+    }
+
+    // if ( v13 != *(_DWORD *)Buffer || v14 != *v4 )
+    if (v13 !== phyBuffer.numJnt || v14 !== phyBuffer.numLnk) {
+        throw new Error("Datos PHY1 incompletos (Exception 950)");
+    }
+
+    console.log(`[PHY1] Físicas procesadas: ${v13} Joints, ${v14} Links.`);
+}
+
+// ============================================================================
+// TRADUCCIÓN LITERAL DE sub_10044FA0 (Procesador de LNK1)
+// ============================================================================
+function sub_10044FA0(linkObj, a2) {
+    // vtFFChunk::Read(this: a2, Buffer, ElementSize: 4u);
+    linkObj.val0 = a2.streamPtr.readAbsolute(a2.dataPos, 4).readUInt32LE(0); a2.dataPos += 4;
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 4, ElementSize: 4u);
+    linkObj.val1 = a2.streamPtr.readAbsolute(a2.dataPos, 4).readUInt32LE(0); a2.dataPos += 4;
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 8, ElementSize: 4u);
+    linkObj.val2 = a2.streamPtr.readAbsolute(a2.dataPos, 4).readUInt32LE(0); a2.dataPos += 4;
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 12, ElementSize: 4u);
+    linkObj.val3 = a2.streamPtr.readAbsolute(a2.dataPos, 4).readUInt32LE(0); a2.dataPos += 4;
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 16, ElementSize: 4u);
+    linkObj.val4 = a2.streamPtr.readAbsolute(a2.dataPos, 4).readUInt32LE(0); a2.dataPos += 4;
+    
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 20, ElementSize: 8u);
+    linkObj.buffer8 = a2.streamPtr.readAbsolute(a2.dataPos, 8); a2.dataPos += 8;
+    
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 28, ElementSize: 4u);
+    linkObj.val5 = a2.streamPtr.readAbsolute(a2.dataPos, 4).readUInt32LE(0); a2.dataPos += 4;
+    
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 32, ElementSize: 0xCu);
+    linkObj.buffer12 = a2.streamPtr.readAbsolute(a2.dataPos, 12); a2.dataPos += 12;
+    
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 44, ElementSize: 4u);
+    linkObj.val6 = a2.streamPtr.readAbsolute(a2.dataPos, 4).readUInt32LE(0); a2.dataPos += 4;
+    
+    // vtFFChunk::Read(this: a2, Buffer: Buffer + 48, ElementSize: 1u);
+    linkObj.val7 = a2.streamPtr.readAbsolute(a2.dataPos, 1).readUInt8(0); a2.dataPos += 1;
+
+    return 1;
+}
 // Traducción de: void __thiscall sub_10043D80(char *Buffer, struct vtFFChunk *a2)
-function sub_10043D80(a2, Str2 = 'STP1') {
+function sub_10043D80(a2, Str2 = 'STP1', idx) {
     // vtFFChunk::vtFFChunk(this: (vtFFChunk *)v10, a2);
     const v10 = new VtFFChunk(a2);
 
@@ -363,7 +587,7 @@ function sub_10043D80(a2, Str2 = 'STP1') {
     if (v10.findFirst('INFO') === 0) {
         throw new Error("CHUNK INFO NO ENCONTRADO EN MSH1 (Exception 558)");
     }
-
+    
     // vtFFChunk::Read(this: (vtFFChunk *)v10, Buffer, ElementSize: 4u);
     const buffer0 = v10.streamPtr.readAbsolute(v10.dataPos, 4).readUInt32LE(0);
     v10.dataPos += 4;
@@ -372,13 +596,14 @@ function sub_10043D80(a2, Str2 = 'STP1') {
     const buffer1 = v10.streamPtr.readAbsolute(v10.dataPos, 4).readUInt32LE(0);
     v10.dataPos += 4;
 
+
     // v5 = *((_DWORD *)Buffer + 1); 
     const v5 = buffer1;
 
     // v7 = 0; v8 = *v4 <= 0;
     let v7 = 0;
     const v8 = buffer1 <= 0;
-
+    const result = []
     if (!v8) {
         do {
             let nextResult;
@@ -397,12 +622,24 @@ function sub_10043D80(a2, Str2 = 'STP1') {
 
             // sub_100441F0(Buffer: (void *)(*((_DWORD *)Buffer + 2) + 104 * v7++), a2: (struct vtFFChunk *)v10);
             const mockMeshBuffers = new Array(v5).fill(null).map(() => ({}));
+
             console.log(`[LOD1 -> MSH1] Fragmento extraído: ${v10.chunkId}, iteración: ${v7}. Llamando a sub_100441F0...`);
-            sub_100441F0(mockMeshBuffers, v10); // Llamada a la función que extrae los vértices finales
-            console.log("buffer1 ", buffer1)
+            const subTemp = sub_100441F0(mockMeshBuffers, v10); // Llamada a la función que extrae los vértices finales
+            exportObj.skinGroups = subTemp.skinGroups
+            exportsArr.push(exportObj)
+            result.push(exportObj)
+            exportObj={
+                vertex: [],
+                faces: [],
+                bones: [],
+                is_touch: false,
+                counter: 0
+            }
+
 
             v7++;
         } while (v7 < buffer1);
+        return result
     }
 }
 // ============================================================================
@@ -423,7 +660,10 @@ function sub_10043F10(meshBuffer, a2) {
         meshBuffer[i] = a2.streamPtr.readAbsolute(a2.dataPos, 4).readUInt32LE(0);
         a2.dataPos += 4;
     }
-
+    if(!exportObj.nodeIdx){
+        exportObj.nodeIdx = meshBuffer[1]
+    }
+    console.log("exportObj.nodeIdx", exportObj.nodeIdx)
     // A partir de aquí, los índices en meshBuffer corresponden a:
     // meshBuffer[3] = Cantidad de elementos del Stream 1 (ej. Vértices)
     // meshBuffer[4] = Cantidad de elementos del Stream 2
@@ -436,11 +676,15 @@ function sub_10043F10(meshBuffer, a2) {
         //geometry
         meshBuffer[10] = a2.streamPtr.readAbsolute(a2.dataPos, size3);
         exportObj.vertex.push(meshBuffer[10])
-        if(exportObj.is_touch){
-            exportXYZBufferToOBJ(exportObj)
-            exportObj.is_touch = false
-        }else{
-            exportObj.is_touch = true
+        if (!exportObj.positions) exportObj.positions = [];
+        let row = []
+        for (let i = 0; i < meshBuffer[10].length / 4; i++) {
+            row.push(meshBuffer[10].readFloatLE(i * 4));
+            if(row.length >= 3){
+                exportObj.positions.push(row)
+                row = []
+            }
+            
         }
         
         a2.dataPos += size3;
@@ -448,62 +692,129 @@ function sub_10043F10(meshBuffer, a2) {
         meshBuffer[10] = null;
     }
 
-    // 3. v4 = malloc(Size: 8 * *((_DWORD *)Buffer + 4)); ... *((_DWORD *)Buffer + 11) = v4;
+    // 3. Stream 2 (8 bytes por elemento ->  UVs)
     const size4 = 8 * (meshBuffer[4] || 0);
     if (size4 > 0) {
         meshBuffer[11] = a2.streamPtr.readAbsolute(a2.dataPos, size4);
+        if (!exportObj.stream2) exportObj.stream2 = [];
+        if (!exportObj.uv) exportObj.uv = [];
+        exportObj.stream2.push(meshBuffer[11]);
+        console.log('meshBuffer[11]  UVs):  ', meshBuffer[11])
+        let row = []
+        for (let i = 0; i < meshBuffer[11].length / 4; i++) {
+            row.push(meshBuffer[11].readFloatLE(i * 4));
+            if(row.length >= 2){
+                exportObj.uv.push(row)
+                row = []
+            }
+            
+        }
         a2.dataPos += size4;
     } else {
         meshBuffer[11] = null;
     }
 
-    // 4. v5 = operator new(a1: 12 * *((_DWORD *)Buffer + 5)); ... *((_DWORD *)Buffer + 12) = v5;
+    // 4. Stream 3 (12 bytes por elemento -> Probables normales)
     const size5 = 12 * (meshBuffer[5] || 0);
     if (size5 > 0) {
         meshBuffer[12] = a2.streamPtr.readAbsolute(a2.dataPos, size5);
+        if (!exportObj.stream3) exportObj.stream3 = [];
+        exportObj.stream3.push(meshBuffer[12]);
+         console.log('meshBuffer[12]  Probables normales: ', meshBuffer[12])
+        if (!exportObj.normals) exportObj.normals = [];
+        let row = []
+        for (let i = 0; i < meshBuffer[12].length / 4; i++) {
+            row.push(meshBuffer[12].readFloatLE(i * 4));
+            if(row.length >= 3){
+                exportObj.normals.push(row)
+                row = []
+            }
+            
+        }
         a2.dataPos += size5;
     } else {
         meshBuffer[12] = null;
     }
 
-    // 5. v6 = malloc(Size: 4 * *((_DWORD *)Buffer + 6)); ... *((_DWORD *)Buffer + 13) = v6;
+    // 5. v6 = malloc(Size: 4 * *((_DWORD *)Buffer + 6)); ... *((_DWORD *)Buffer + 13) = v6 idMaterials;
     const size6_1 = 4 * (meshBuffer[6] || 0);
     if (size6_1 > 0) {
         meshBuffer[13] = a2.streamPtr.readAbsolute(a2.dataPos, size6_1);
+        console.log("meshBuffer[13]: ", meshBuffer[13])
+        console.log("meshBuffer[13].length", meshBuffer[13].length)
+        if(!exportObj.materialsId){
+            exportObj.materialsId = [];
+        }
+
+        for (let i = 0; i < meshBuffer[13].length / 4; i++) {
+            exportObj.materialsId.push(meshBuffer[13].readInt32LE(i * 4));
+        }
         a2.dataPos += size6_1;
     } else {
         meshBuffer[13] = null;
     }
 
-    // 6. v7 = malloc(Size: 12 * *((_DWORD *)Buffer + 6)); ... *((_DWORD *)Buffer + 14) = v7;
+    // 6. v7 = malloc(Size: 12 * *((_DWORD *)Buffer + 6)); ... *((_DWORD *)Buffer + 14) = v7 idFaces;
     const size6_2 = 12 * (meshBuffer[6] || 0);
     if (size6_2 > 0) {
         meshBuffer[14] = a2.streamPtr.readAbsolute(a2.dataPos, size6_2);
-        exportObj.faces.push(meshBuffer[14])
-        if(exportObj.is_touch){
-            exportXYZBufferToOBJ(exportObj)
-            exportObj.is_touch = false
-        }else{
-            exportObj.is_touch = true
+        let row = []
+        for (let i = 0; i < meshBuffer[14].length / 4; i++) {
+            row.push(meshBuffer[14].readInt32LE(i * 4));
+            if(row.length >= 3){
+                exportObj.faces.push(row)
+                row = []
+            }
+            
         }
+        console.log("meshBuffer[14]: ",meshBuffer[14])
+        
         a2.dataPos += size6_2;
     } else {
         meshBuffer[14] = null;
     }
 
-    // 7. v8 = malloc(Size: 12 * *((_DWORD *)Buffer + 6)); ... *((_DWORD *)Buffer + 15) = v8;
+    // 7. v8 = malloc(Size: 12 * *((_DWORD *)Buffer + 6)); ... *((_DWORD *)Buffer + 15) = v8 idxUv;
     const size6_3 = 12 * (meshBuffer[6] || 0);
     if (size6_3 > 0) {
         meshBuffer[15] = a2.streamPtr.readAbsolute(a2.dataPos, size6_3);
+        console.log("meshBuffer[15]: ", meshBuffer[15])
+        if(!exportObj.idxUv){
+            exportObj.idxUv = []
+        }
+        let row = []
+        for (let i = 0; i < meshBuffer[15].length / 4; i++) {
+            row.push(meshBuffer[15].readInt32LE(i * 4));
+            if(row.length >= 3){
+                exportObj.idxUv.push(row)
+                row = []
+            }
+            
+        }
+        
         a2.dataPos += size6_3;
     } else {
         meshBuffer[15] = null;
     }
 
-    // 8. v9 = malloc(Size: 12 * *((_DWORD *)Buffer + 6)); ... *((_DWORD *)Buffer + 16) = v9;
+    // 8. v9 = malloc(Size: 12 * *((_DWORD *)Buffer + 6)); ... *((_DWORD *)Buffer + 16) = v9 idxNormals;
     const size6_4 = 12 * (meshBuffer[6] || 0);
     if (size6_4 > 0) {
         meshBuffer[16] = a2.streamPtr.readAbsolute(a2.dataPos, size6_4);
+        console.log("meshBuffer[16]: ", meshBuffer[16])
+        if(!exportObj.idxNormals){
+            exportObj.idxNormals = []
+        }
+        let row = []
+        for (let i = 0; i < meshBuffer[16].length / 4; i++) {
+            row.push(meshBuffer[16].readInt32LE(i * 4));
+            if(row.length >= 3){
+                exportObj.idxNormals.push(row)
+                row = []
+            }
+            
+        }
+        
         a2.dataPos += size6_4;
     } else {
         meshBuffer[16] = null;
@@ -513,103 +824,1068 @@ function sub_10043F10(meshBuffer, a2) {
     // Nota: Buffer + 68 bytes equivale al índice aritmético [17] en un array de DWORDs (17 * 4 = 68).
     // Leemos 12 bytes (0xCu).
     meshBuffer[17] = a2.streamPtr.readAbsolute(a2.dataPos, 12);
+    if(!exportObj.bboxMin){
+        exportObj.bboxMin = []
+    }
+    let row = []
+    for (let i = 0; i < meshBuffer[17].length / 4; i++) {
+        row.push(meshBuffer[17].readFloatLE(i * 4));
+        if(row.length >= 3){
+            exportObj.bboxMin.push(row)
+            row = []
+        }
+        
+    }
+    console.log("meshBuffer[16]: ", meshBuffer[16])
     a2.dataPos += 12;
 
-    // 10. vtFFChunk::Read(this: a2, Buffer: Buffer + 80, ElementSize: 0xCu);
-    // Buffer + 80 bytes equivale al índice aritmético [20] (20 * 4 = 80).
-    // Leemos 12 bytes y retornamos el resultado de la lectura.
     meshBuffer[20] = a2.streamPtr.readAbsolute(a2.dataPos, 12);
+
+    if(!exportObj.bboxMax){
+        exportObj.bboxMax = []
+    }
+    row = []
+    for (let i = 0; i < meshBuffer[20].length / 4; i++) {
+        row.push(meshBuffer[20].readFloatLE(i * 4));
+        if(row.length >= 3){
+            exportObj.bboxMax.push(row)
+            row = []
+        }
+        
+    }
     a2.dataPos += 12;
 
-    return 1; // Equivalente al retorno exitoso de vtFFChunk::Read
+    return exportObj; // Equivalente al retorno exitoso de vtFFChunk::Read
 }
 
 // Procesa el chunk ZMR1
 function sub_10044B40(zmrEntry, chunk) {
     console.log(`[MSH1] Llamada a sub_10044B40(ZMR1).`);
 }
-function exportXYZBufferToOBJ(exportObj) {
-    const counter = exportObj.counter
-    const xyzBuffer = exportObj.vertex[counter]
-    const facesBuffer = exportObj.faces[counter]
-   
-    let objContent = `# Exportado desde Buffer XYZ crudo\n`;
-    objContent += `g MallaCuchillo\n\n`;
+function _boneSkinCentroids(model){
+    const agg = new Map()
+    console.log(" model.meshes:", model.meshes)
+    for(let idx in model.meshes){
+        console.log( "model.meshes[idx]: ", model.meshes[idx])
+        const mesh = model.meshes[idx]
+        for(let keySkin in mesh.skinGroups){
+            const skin = mesh.skinGroups[keySkin]
+            for(let keyVertWeight in skin.vertWeightArr){
+                const vertWeight = skin.vertWeightArr[keyVertWeight]
+                const vertex = vertWeight[0]
+                const weight = vertWeight[1]
+                if(vertex >= mesh.positions.length){
+                    continue;
+                }
+                const pos = mesh.positions[vertex]
+                let acc = agg.get(skin.boneIdx);
 
-    const VERTEX_STRIDE = 12; // 3 floats x 4 bytes cada uno (X, Y, Z)
-    const vertexCount = Math.floor(xyzBuffer.length / VERTEX_STRIDE);
+                if (acc === undefined) {
+                    acc = [[0, 0, 0], 0.0];
+                    agg.set(skin.boneIdx, acc);
+                }
+                console.log("mesh.boneIdx:", vertex, weight)
+                acc[0][0] += pos[0] * weight;
+                acc[0][1] += pos[1] * weight;
+                acc[0][2] += pos[2] * weight;
 
-    console.log(`\n📦 Procesando Buffer XYZ: ${xyzBuffer.length} bytes -> ~${vertexCount} vértices detectados.`);
+                acc[1] += weight;
 
-    let validVertices = 0;
-
-    for (let i = 0; i < vertexCount; i++) {
-        const offset = i * VERTEX_STRIDE;
-
-        // Leer los 3 floats de 32 bits en Little Endian
-        const x = xyzBuffer.readFloatLE(offset);
-        const y = xyzBuffer.readFloatLE(offset + 4);
-        const z = xyzBuffer.readFloatLE(offset + 8);
-
-        // Validación básica de seguridad para descartar ruido o paddings nulos
-        if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-            objContent += `v ${x.toFixed(6)} ${y.toFixed(6)} ${z.toFixed(6)}\n`;
-            validVertices++;
+            }
         }
     }
-    // Nota: Como este buffer contiene únicamente los puntos (vértices) de los STP1 
-    // sin la lista directa de caras ZTR1 en este fragmento, generamos una nube de puntos 
-    // o puedes conectar las caras si ya dispones de los índices.
-    // Para ver los vértices como puntos en el OBJ, añadimos un bloque "p":
-    objContent += `\n# Nube de vértices\np `;
-    for (let i = 1; i <= validVertices; i++) {
-        objContent += `${i} `;
-    }
-    objContent += `\n`;
-    // 2. Procesar Caras / Índices
-    const indices = [];
-    let cursor = 0;
+    const result = new Map();
 
-    while (cursor < facesBuffer.length) {
-        let idx = 0;
-        if (32 === 32) {
-            if (cursor + 4 > facesBuffer.length) break;
-            idx = facesBuffer.readUInt32LE(cursor);
-            cursor += 4;
-        } else {
-            if (cursor + 2 > facesBuffer.length) break;
-            idx = facesBuffer.readUInt16LE(cursor);
-            cursor += 2;
+    for (const [k, v] of agg) {
+        if (v[1] > 0) {
+            result.set(k, [
+                v[0][0] / v[1],
+                v[0][1] / v[1],
+                v[0][2] / v[1]
+            ]);
         }
-        indices.push(idx);
     }
 
-    console.log(`📦 Procesando Caras: ${facesBuffer.length} bytes -> ${indices.length} índices leídos.`);
+    return result;
+}
+function computeBoneRestPositions(model){
+    
+    const centroIds = _boneSkinCentroids(model)
+    const resolved =  new Array(model.boneCount).fill(null);
+    const fallbackBones = []
 
-    // 3. Escribir las caras en formato OBJ (agrupadas de 3 en 3, adaptadas a base 1)
-    objContent += `usemtl DefaultMaterial\n`;
-    let faceCount = 0;
-
-    for (let i = 0; i + 2 < indices.length; i += 3) {
-        const i1 = indices[i] + 1;
-        const i2 = indices[i + 1] + 1;
-        const i3 = indices[i + 2] + 1;
-
-        // Validar que los índices estén dentro del rango de vértices cargados
-        if (i1 <= vertexCount && i2 <= vertexCount && i3 <= vertexCount) {
-            if (i1 !== i2 && i2 !== i3 && i1 !== i3) {
-                objContent += `f ${i1} ${i2} ${i3}\n`;
-                faceCount++;
+    for(let i = 0; i < model.boneCount; i++){
+        if(centroIds.has(i)){
+            resolved[i] = [...centroIds.get(i)]
+        }else{
+            const parent = model.bonesArr[i].parentId
+            fallbackBones.push(i)
+            console.log("[computeBoneRestPositions] parent:", parent)
+            if (parent < model.bone_count && resolved[parent] != null){
+                resolved[i] = resolved[parent]
+            }else{
+                resolved[i] = [0.0, 0.0, 0.0]
             }
         }
     }
 
-
-    const outputFilePath = fs.writeFileSync(process.argv[2] ? `${process.argv[2].replace(".NFO", `_${counter}.obj`)}` : './nfos/Cuchillo.obj', objContent);
-    exportObj.counter = exportObj.counter + 1
-    console.log(`✅ Archivo .obj generado con éxito en: ${outputFilePath}`);
-    console.log(`   - Vértices escritos: ${validVertices}`);
+    return {resolved, fallbackBones}
 }
+function _boneHierarchy(model){
+    const children = []
+
+    for (let i = 0; i < model.boneCount; i++) {
+        children.push([]);
+    }
+
+    for (let i = 0; i < model.boneCount; i++) {
+        const p = model.bonesArr[i].parentId;
+
+        if (p >= 0 && p < model.boneCount) {
+            children[p].push(i);
+        }
+    }
+    return children
+}
+function _axisDots(engineRI, direction){
+    return [
+        Math.abs(
+            engineRI[0][0] * direction[0] +
+            engineRI[1][0] * direction[1] +
+            engineRI[2][0] * direction[2]
+        ),
+        Math.abs(
+            engineRI[0][1] * direction[0] +
+            engineRI[1][1] * direction[1] +
+            engineRI[2][1] * direction[2]
+        ),
+        Math.abs(
+            engineRI[0][2] * direction[0] +
+            engineRI[1][2] * direction[1] +
+            engineRI[2][2] * direction[2]
+        )
+    ];
+}
+function _pickReferenceChild(engineRI, realChildDirs){
+    const primaryDir = realChildDirs[0]
+    const primaryDots = _axisDots(engineRI, primaryDir)
+    
+    const order = [0, 1, 2].sort((a, b) => primaryDots[b] - primaryDots[a]);
+    if (primaryDots[order[0]] - primaryDots[order[1]] > 0.15) {
+        return [
+            primaryDir,
+            order[0],
+            primaryDots[order[0]]
+        ];
+    }
+
+    let bestDir = null;
+    let bestK = null;
+    let bestConf = -1.0;
+
+    for (const d of realChildDirs.slice(1)) {
+        const dots = _axisDots(engineRI, d);
+
+        // np.argmax(dots)
+        let k = 0;
+        for (let i = 1; i < dots.length; i++) {
+            if (dots[i] > dots[k]) {
+                k = i;
+            }
+        }
+
+        if (dots[k] > bestConf) {
+            bestConf = dots[k];
+            bestK = k;
+            bestDir = d;
+        }
+    }
+
+    if (bestDir !== null && bestConf > 0.85) {
+        return [
+            bestDir,
+            bestK,
+            bestConf
+        ];
+    }
+
+    return [
+        primaryDir,
+        order[0],
+        primaryDots[order[0]]
+    ];
+}
+function _buildCorrectedFrame(engineRI, trueY, k){
+    const ROLL_SIGN_BY_FORWARD_AXIS = {
+        0: 1.0,
+        1: 1.0,
+        2: -1.0
+    };
+
+    const refIdx = (k + 2) % 3;
+
+    const sign = ROLL_SIGN_BY_FORWARD_AXIS[k] ?? 1.0;
+
+    // engine_R_i[:, ref_idx]
+    const zRaw = [
+        sign * engineRI[0][refIdx],
+        sign * engineRI[1][refIdx],
+        sign * engineRI[2][refIdx]
+    ];
+
+    // z_perp = z_raw - np.dot(z_raw, true_y) * true_y
+    const dotZY =
+        zRaw[0] * trueY[0] +
+        zRaw[1] * trueY[1] +
+        zRaw[2] * trueY[2];
+
+    const zPerp = [
+        zRaw[0] - dotZY * trueY[0],
+        zRaw[1] - dotZY * trueY[1],
+        zRaw[2] - dotZY * trueY[2]
+    ];
+
+    // n = np.linalg.norm(z_perp)
+    let n = Math.sqrt(
+        zPerp[0] * zPerp[0] +
+        zPerp[1] * zPerp[1] +
+        zPerp[2] * zPerp[2]
+    );
+
+    let finalZPerp = zPerp;
+
+    if (n < 1e-8) {
+        // true_y is (near-)parallel to the roll-reference axis too
+        // (degenerate bone orientation) -- fall back to any perpendicular.
+
+        const alt = Math.abs(trueY[0]) < 0.9
+            ? [1.0, 0.0, 0.0]
+            : [0.0, 1.0, 0.0];
+
+        const dotAltY =
+            alt[0] * trueY[0] +
+            alt[1] * trueY[1] +
+            alt[2] * trueY[2];
+
+        finalZPerp = [
+            alt[0] - dotAltY * trueY[0],
+            alt[1] - dotAltY * trueY[1],
+            alt[2] - dotAltY * trueY[2]
+        ];
+
+        n = Math.sqrt(
+            finalZPerp[0] * finalZPerp[0] +
+            finalZPerp[1] * finalZPerp[1] +
+            finalZPerp[2] * finalZPerp[2]
+        );
+    }
+
+    // z_axis = z_perp / n
+    const zAxis = [
+        finalZPerp[0] / n,
+        finalZPerp[1] / n,
+        finalZPerp[2] / n
+    ];
+
+    // x_axis = np.cross(true_y, z_axis)
+    const xAxis = [
+        trueY[1] * zAxis[2] - trueY[2] * zAxis[1],
+        trueY[2] * zAxis[0] - trueY[0] * zAxis[2],
+        trueY[0] * zAxis[1] - trueY[1] * zAxis[0]
+    ];
+
+    // np.column_stack([x_axis, true_y, z_axis])
+    return [
+        [xAxis[0], trueY[0], zAxis[0]],
+        [xAxis[1], trueY[1], zAxis[1]],
+        [xAxis[2], trueY[2], zAxis[2]]
+    ];
+}
+function _autoCorrectBindRotations(model, rAbsolute, worldPosition, fallbackBones){
+    const children = _boneHierarchy(model)
+    const fallbackSet = new Set(fallbackBones);
+    const corrected = new Array(model.boneCount).fill(null);
+    for(let i = 0; i < model.boneCount; i++){
+        const realKids = children[i].filter(
+            c => {
+                return !fallbackSet.has(c)}
+        );
+        const childDirs = []
+        for(let c of realKids){
+            const d = [
+                worldPosition[c][0] - worldPosition[i][0],
+                worldPosition[c][1] - worldPosition[i][1],
+                worldPosition[c][2] - worldPosition[i][2]
+            ];
+            const n = Math.sqrt(
+                d[0] * d[0] +
+                d[1] * d[1] +
+                d[2] * d[2]
+            );
+
+            if (n > 1e-6) {
+                childDirs.push([
+                    d[0] / n,
+                    d[1] / n,
+                    d[2] / n
+                ]);
+            }
+        }
+        let frame;
+        if(childDirs.length > 0){
+            const [trueY, k, _conf] = _pickReferenceChild(rAbsolute[i], childDirs)
+     
+            
+            frame = _buildCorrectedFrame(rAbsolute[i], trueY, k)
+            console.log("frame: ", frame)
+        }
+        if(!frame){
+            const parent = model.bonesArr[i].parentId;
+
+            if (
+                parent >= 0 &&
+                parent < model.boneCount &&
+                corrected[parent] !== null
+            ) {
+                // relative = inv(rAbsolute[parent]) @ rAbsolute[i]
+
+                const p = rAbsolute[parent];
+
+                const det =
+                    p[0][0] * (p[1][1] * p[2][2] - p[1][2] * p[2][1]) -
+                    p[0][1] * (p[1][0] * p[2][2] - p[1][2] * p[2][0]) +
+                    p[0][2] * (p[1][0] * p[2][1] - p[1][1] * p[2][0]);
+
+                const invDet = 1.0 / det;
+
+                const invParent = [
+                    [
+                        (p[1][1] * p[2][2] - p[1][2] * p[2][1]) * invDet,
+                        (p[0][2] * p[2][1] - p[0][1] * p[2][2]) * invDet,
+                        (p[0][1] * p[1][2] - p[0][2] * p[1][1]) * invDet
+                    ],
+                    [
+                        (p[1][2] * p[2][0] - p[1][0] * p[2][2]) * invDet,
+                        (p[0][0] * p[2][2] - p[0][2] * p[2][0]) * invDet,
+                        (p[0][2] * p[1][0] - p[0][0] * p[1][2]) * invDet
+                    ],
+                    [
+                        (p[1][0] * p[2][1] - p[1][1] * p[2][0]) * invDet,
+                        (p[0][1] * p[2][0] - p[0][0] * p[2][1]) * invDet,
+                        (p[0][0] * p[1][1] - p[0][1] * p[1][0]) * invDet
+                    ]
+                ];
+
+                const r = rAbsolute[i];
+
+                const relative = [
+                    [
+                        invParent[0][0] * r[0][0] +
+                        invParent[0][1] * r[1][0] +
+                        invParent[0][2] * r[2][0],
+
+                        invParent[0][0] * r[0][1] +
+                        invParent[0][1] * r[1][1] +
+                        invParent[0][2] * r[2][1],
+
+                        invParent[0][0] * r[0][2] +
+                        invParent[0][1] * r[1][2] +
+                        invParent[0][2] * r[2][2]
+                    ],
+                    [
+                        invParent[1][0] * r[0][0] +
+                        invParent[1][1] * r[1][0] +
+                        invParent[1][2] * r[2][0],
+
+                        invParent[1][0] * r[0][1] +
+                        invParent[1][1] * r[1][1] +
+                        invParent[1][2] * r[2][1],
+
+                        invParent[1][0] * r[0][2] +
+                        invParent[1][1] * r[1][2] +
+                        invParent[1][2] * r[2][2]
+                    ],
+                    [
+                        invParent[2][0] * r[0][0] +
+                        invParent[2][1] * r[1][0] +
+                        invParent[2][2] * r[2][0],
+
+                        invParent[2][0] * r[0][1] +
+                        invParent[2][1] * r[1][1] +
+                        invParent[2][2] * r[2][1],
+
+                        invParent[2][0] * r[0][2] +
+                        invParent[2][1] * r[1][2] +
+                        invParent[2][2] * r[2][2]
+                    ]
+                ];
+
+                // frame = corrected[parent] @ relative
+
+                const c = corrected[parent];
+
+                frame = [
+                    [
+                        c[0][0] * relative[0][0] +
+                        c[0][1] * relative[1][0] +
+                        c[0][2] * relative[2][0],
+
+                        c[0][0] * relative[0][1] +
+                        c[0][1] * relative[1][1] +
+                        c[0][2] * relative[2][1],
+
+                        c[0][0] * relative[0][2] +
+                        c[0][1] * relative[1][2] +
+                        c[0][2] * relative[2][2]
+                    ],
+                    [
+                        c[1][0] * relative[0][0] +
+                        c[1][1] * relative[1][0] +
+                        c[1][2] * relative[2][0],
+
+                        c[1][0] * relative[0][1] +
+                        c[1][1] * relative[1][1] +
+                        c[1][2] * relative[2][1],
+
+                        c[1][0] * relative[0][2] +
+                        c[1][1] * relative[1][2] +
+                        c[1][2] * relative[2][2]
+                    ],
+                    [
+                        c[2][0] * relative[0][0] +
+                        c[2][1] * relative[1][0] +
+                        c[2][2] * relative[2][0],
+
+                        c[2][0] * relative[0][1] +
+                        c[2][1] * relative[1][1] +
+                        c[2][2] * relative[2][1],
+
+                        c[2][0] * relative[0][2] +
+                        c[2][1] * relative[1][2] +
+                        c[2][2] * relative[2][2]
+                    ]
+                ];
+            } else {
+                frame = rAbsolute[i];
+            }
+            
+        }
+        corrected[i] = frame
+        
+    }
+    return corrected
+
+}
+function quatFromRotationMatrix(R){
+    const m = R;
+
+    const trace = m[0][0] + m[1][1] + m[2][2];
+
+    let x, y, z, w;
+
+    if (trace > 0) {
+
+        const s = 0.5 / Math.sqrt(trace + 1.0);
+
+        w = 0.25 / s;
+        x = (m[2][1] - m[1][2]) * s;
+        y = (m[0][2] - m[2][0]) * s;
+        z = (m[1][0] - m[0][1]) * s;
+
+    } else if (
+        m[0][0] > m[1][1] &&
+        m[0][0] > m[2][2]
+    ) {
+
+        const s = 2.0 * Math.sqrt(
+            1.0 +
+            m[0][0] -
+            m[1][1] -
+            m[2][2]
+        );
+
+        w = (m[2][1] - m[1][2]) / s;
+        x = 0.25 * s;
+        y = (m[0][1] + m[1][0]) / s;
+        z = (m[0][2] + m[2][0]) / s;
+
+    } else if (m[1][1] > m[2][2]) {
+
+        const s = 2.0 * Math.sqrt(
+            1.0 +
+            m[1][1] -
+            m[0][0] -
+            m[2][2]
+        );
+
+        w = (m[0][2] - m[2][0]) / s;
+        x = (m[0][1] + m[1][0]) / s;
+        y = 0.25 * s;
+        z = (m[1][2] + m[2][1]) / s;
+
+    } else {
+
+        const s = 2.0 * Math.sqrt(
+            1.0 +
+            m[2][2] -
+            m[0][0] -
+            m[1][1]
+        );
+
+        w = (m[1][0] - m[0][1]) / s;
+        x = (m[0][2] + m[2][0]) / s;
+        y = (m[1][2] + m[2][1]) / s;
+        z = 0.25 * s;
+    }
+
+    // q = np.array([x, y, z, w])
+    const q = [x, y, z, w];
+
+    // n = np.linalg.norm(q)
+    const n = Math.sqrt(
+        q[0] * q[0] +
+        q[1] * q[1] +
+        q[2] * q[2] +
+        q[3] * q[3]
+    );
+
+    // return q / n
+    if (n > 1e-12) {
+        return [
+            q[0] / n,
+            q[1] / n,
+            q[2] / n,
+            q[3] / n
+        ];
+    }
+
+    return [0.0, 0.0, 0.0, 1.0];
+}
+function computeBoneBindTransforms(model){
+    const resPosition = computeBoneRestPositions(model)
+    let worldPosition = resPosition.resolved
+    const fallbackBones = resPosition.fallbackBones
+    worldPosition = worldPosition.map(p => [...p]);
+    console.log('worldPosition: ', worldPosition)
+    const rAbsolute = []
+
+    for (let i = 0; i < model.boneCount; i++) {
+        const m = model.bonesArr[i].matrix;
+
+        if (m.length !== 0x40) {
+            throw new Error(`Expected 0x40 bytes, got 0x${m.length.toString(16)}`);
+        }
+
+        // 16 float32 little-endian
+        const M = [
+            [
+                m.readFloatLE(0),
+                m.readFloatLE(4),
+                m.readFloatLE(8),
+                m.readFloatLE(12)
+            ],
+            [
+                m.readFloatLE(16),
+                m.readFloatLE(20),
+                m.readFloatLE(24),
+                m.readFloatLE(28)
+            ],
+            [
+                m.readFloatLE(32),
+                m.readFloatLE(36),
+                m.readFloatLE(40),
+                m.readFloatLE(44)
+            ],
+            [
+                m.readFloatLE(48),
+                m.readFloatLE(52),
+                m.readFloatLE(56),
+                m.readFloatLE(60)
+            ]
+        ];
+
+        console.log("matrix:", M);
+
+        // Python:
+        // M[0:3, 0:3].T
+        const R = [
+            [M[0][0], M[1][0], M[2][0]],
+            [M[0][1], M[1][1], M[2][1]],
+            [M[0][2], M[1][2], M[2][2]]
+        ];
+
+        rAbsolute.push(R);
+    }
+    const rAbsolute_2 = _autoCorrectBindRotations(model, rAbsolute, worldPosition, fallbackBones)
+    //aqui xendo
+    const localTranslations = new Array(model.boneCount).fill(null);
+    const localQuats = new Array(model.boneCount).fill(null);
+    for(let i = 0; i < model.boneCount; i++){
+        const parent = model.bonesArr[i].parentId
+        let rLocal;
+        if(parent === -1){
+            localTranslations[i] = worldPosition[i]
+            rLocal = rAbsolute_2[i]
+        }else{
+            // ============================================================
+            // r_parent_inv = np.linalg.inv(r_absolute[parent])
+            // ============================================================
+
+            const p = rAbsolute_2[parent];
+            
+            const det =
+                p[0][0] * (p[1][1] * p[2][2] - p[1][2] * p[2][1]) -
+                p[0][1] * (p[1][0] * p[2][2] - p[1][2] * p[2][0]) +
+                p[0][2] * (p[1][0] * p[2][1] - p[1][1] * p[2][0]);
+
+            if (Math.abs(det) < 1e-12) {
+                throw new Error(`Cannot invert rAbsolute[${parent}]`);
+            }
+
+            const invDet = 1.0 / det;
+
+            const rParentInv = [
+                [
+                    (p[1][1] * p[2][2] - p[1][2] * p[2][1]) * invDet,
+                    (p[0][2] * p[2][1] - p[0][1] * p[2][2]) * invDet,
+                    (p[0][1] * p[1][2] - p[0][2] * p[1][1]) * invDet
+                ],
+                [
+                    (p[1][2] * p[2][0] - p[1][0] * p[2][2]) * invDet,
+                    (p[0][0] * p[2][2] - p[0][2] * p[2][0]) * invDet,
+                    (p[0][2] * p[1][0] - p[0][0] * p[1][2]) * invDet
+                ],
+                [
+                    (p[1][0] * p[2][1] - p[1][1] * p[2][0]) * invDet,
+                    (p[0][1] * p[2][0] - p[0][0] * p[2][1]) * invDet,
+                    (p[0][0] * p[1][1] - p[0][1] * p[1][0]) * invDet
+                ]
+            ];
+            
+            // ============================================================
+            // delta = world_positions[i] - world_positions[parent]
+            // ============================================================
+
+            const delta = [
+                worldPosition[i][0] - worldPosition[parent][0],
+                worldPosition[i][1] - worldPosition[parent][1],
+                worldPosition[i][2] - worldPosition[parent][2]
+            ];
+            
+            // ============================================================
+            // local_translations[i] = r_parent_inv @ delta
+            // ============================================================
+
+            localTranslations[i] = [
+                rParentInv[0][0] * delta[0] +
+                rParentInv[0][1] * delta[1] +
+                rParentInv[0][2] * delta[2],
+
+                rParentInv[1][0] * delta[0] +
+                rParentInv[1][1] * delta[1] +
+                rParentInv[1][2] * delta[2],
+
+                rParentInv[2][0] * delta[0] +
+                rParentInv[2][1] * delta[1] +
+                rParentInv[2][2] * delta[2]
+            ];
+            
+            // ============================================================
+            // r_local = r_parent_inv @ r_absolute[i]
+            // ============================================================
+
+            const r = rAbsolute_2[i];
+            
+            rLocal = [
+                [
+                    rParentInv[0][0] * r[0][0] +
+                    rParentInv[0][1] * r[1][0] +
+                    rParentInv[0][2] * r[2][0],
+
+                    rParentInv[0][0] * r[0][1] +
+                    rParentInv[0][1] * r[1][1] +
+                    rParentInv[0][2] * r[2][1],
+
+                    rParentInv[0][0] * r[0][2] +
+                    rParentInv[0][1] * r[1][2] +
+                    rParentInv[0][2] * r[2][2]
+                ],
+                [
+                    rParentInv[1][0] * r[0][0] +
+                    rParentInv[1][1] * r[1][0] +
+                    rParentInv[1][2] * r[2][0],
+
+                    rParentInv[1][0] * r[0][1] +
+                    rParentInv[1][1] * r[1][1] +
+                    rParentInv[1][2] * r[2][1],
+
+                    rParentInv[1][0] * r[0][2] +
+                    rParentInv[1][1] * r[1][2] +
+                    rParentInv[1][2] * r[2][2]
+                ],
+                [
+                    rParentInv[2][0] * r[0][0] +
+                    rParentInv[2][1] * r[1][0] +
+                    rParentInv[2][2] * r[2][0],
+
+                    rParentInv[2][0] * r[0][1] +
+                    rParentInv[2][1] * r[1][1] +
+                    rParentInv[2][2] * r[2][1],
+
+                    rParentInv[2][0] * r[0][2] +
+                    rParentInv[2][1] * r[1][2] +
+                    rParentInv[2][2] * r[2][2]
+                ]
+            ];
+
+        }
+        localQuats[i] = quatFromRotationMatrix(rLocal)
+
+    }
+    return {localTranslations, localQuats, rAbsolute_2, fallbackBones}
+}
+function matricesAlmostEqual(a, b, tolerance = 1e-8) {
+    for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 4; j++) {
+            if (Math.abs(a[i][j] - b[i][j]) > tolerance) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+function trsToMatrix(t, q, s) {
+    // t = [x, y, z]
+    // q = [x, y, z, w]
+    // s = [sx, sy, sz]
+
+    const [x, y, z, w] = q;
+
+    const R = [
+        [
+            1 - 2 * (y * y + z * z),
+            2 * (x * y - z * w),
+            2 * (x * z + y * w)
+        ],
+        [
+            2 * (x * y + z * w),
+            1 - 2 * (x * x + z * z),
+            2 * (y * z - x * w)
+        ],
+        [
+            2 * (x * z - y * w),
+            2 * (y * z + x * w),
+            1 - 2 * (x * x + y * y)
+        ]
+    ];
+
+    const M = [
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+    ];
+
+    // M[0:3, 0:3] = R * s[None, :]
+    // Escala cada columna de R:
+    M[0][0] = R[0][0] * s[0];
+    M[0][1] = R[0][1] * s[1];
+    M[0][2] = R[0][2] * s[2];
+
+    M[1][0] = R[1][0] * s[0];
+    M[1][1] = R[1][1] * s[1];
+    M[1][2] = R[1][2] * s[2];
+
+    M[2][0] = R[2][0] * s[0];
+    M[2][1] = R[2][1] * s[1];
+    M[2][2] = R[2][2] * s[2];
+
+    // M[0:3, 3] = t
+    M[0][3] = t[0];
+    M[1][3] = t[1];
+    M[2][3] = t[2];
+
+    return M;
+}
+function multiplyMat4(a, b) {
+    const result = [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0]
+    ];
+
+    for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 4; j++) {
+            result[i][j] =
+                a[i][0] * b[0][j] +
+                a[i][1] * b[1][j] +
+                a[i][2] * b[2][j] +
+                a[i][3] * b[3][j];
+        }
+    }
+
+    return result;
+}
+function decomposeColMatrix(M) {
+    // t = M[0:3, 3].copy()
+    const t = [
+        M[0][3],
+        M[1][3],
+        M[2][3]
+    ];
+
+    // basis_cols = M[0:3, 0:3]
+    const basisCols = [
+        [M[0][0], M[0][1], M[0][2]],
+        [M[1][0], M[1][1], M[1][2]],
+        [M[2][0], M[2][1], M[2][2]]
+    ];
+
+    // scale = np.linalg.norm(basis_cols, axis=0)
+    const scale = [
+        Math.sqrt(
+            basisCols[0][0] ** 2 +
+            basisCols[1][0] ** 2 +
+            basisCols[2][0] ** 2
+        ),
+        Math.sqrt(
+            basisCols[0][1] ** 2 +
+            basisCols[1][1] ** 2 +
+            basisCols[2][1] ** 2
+        ),
+        Math.sqrt(
+            basisCols[0][2] ** 2 +
+            basisCols[1][2] ** 2 +
+            basisCols[2][2] ** 2
+        )
+    ];
+
+    // scale_safe = np.where(scale < 1e-12, 1.0, scale)
+    const scaleSafe = [
+        scale[0] < 1e-12 ? 1.0 : scale[0],
+        scale[1] < 1e-12 ? 1.0 : scale[1],
+        scale[2] < 1e-12 ? 1.0 : scale[2]
+    ];
+
+    // R = basis_cols / scale_safe[None, :]
+    const R = [
+        [
+            basisCols[0][0] / scaleSafe[0],
+            basisCols[0][1] / scaleSafe[1],
+            basisCols[0][2] / scaleSafe[2]
+        ],
+        [
+            basisCols[1][0] / scaleSafe[0],
+            basisCols[1][1] / scaleSafe[1],
+            basisCols[1][2] / scaleSafe[2]
+        ],
+        [
+            basisCols[2][0] / scaleSafe[0],
+            basisCols[2][1] / scaleSafe[1],
+            basisCols[2][2] / scaleSafe[2]
+        ]
+    ];
+
+    const q = quatFromRotationMatrix(R);
+
+    return [t, q, scale];
+}
+function exportXYZBufferToGlft(exportObjArray, exports) {
+    console.log("exports", exports)
+    const axisFix = AXIS_MATRICES[`none`]
+    const obj1Arr = exports.obj1 || []
+    const nodes = [];
+    const scenes = [{nodes: []}]//{ nodes: [sceneRootIndex] }],  
+    for(let key in obj1Arr){
+                                                                                                                                                                                     
+        const model = obj1Arr[key]
+        console.log("model", model.boneCount)
+        const {localTranslations, localQuats, rAbsolute_2, fallbackBones} = computeBoneBindTransforms(model)
+        const localTranslations2 = localTranslations.map(t => [
+            t[0] * 0.01, //scale
+            t[1] * 0.01, //scale
+            t[2] * 0.01  //scale
+        ]);
+        console.log("localTranslations2: ", localTranslations2)
+        if(fallbackBones.length > 0){
+            const names = model.bonesArr.filter((row, i) => fallbackBones.indexOf(i)>-1).map(row=>row.nameBone)
+            console.warn(`  note: ${fallbackBones.length} bone(s) had no skin-weight data to derive a rest position from, placed at their parent instead: ${names}`)
+        }
+
+        const nodeIndices = new Array(model.boneCount).fill([]); 
+        const localTrs = new Array(model.boneCount).fill([]);
+        for(let i = 0; i < model.boneCount; i++){
+            const node = model.bonesArr[i];
+            const t = localTranslations[i];
+            const q = localQuats[i];
+            const s = [1.0, 1.0, 1.0];
+            localTrs[i] = [t, q, s]
+            const gn = {
+                mesh: null,
+                skin: null,
+                rotation: q,
+                translation: t,
+                scale: s,
+                children: [],
+                matrix: null,
+                camera: null,
+                name: node.nameBone
+            }
+            const idx = nodes.length
+            nodes.push(gn)
+            nodeIndices[i] = idx
+
+        }
+
+        const roots = []
+        for(let i = 0; i < model.boneCount; i++){
+            const node = model.bonesArr[i]
+            const gi = nodeIndices[i]
+            if(node.parentId === -1){
+                roots.push(i)
+                const identity4 = [
+                    [1, 0, 0, 0],
+                    [0, 1, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 0, 0, 1]
+                ];
+
+                if (!matricesAlmostEqual(axisFix, identity4)) {
+                    const [t, q, s]= localTrs[i]
+                    const M = multiplyMat4(
+                        axisFix,
+                        trsToMatrix(t, q, s)
+                    );
+                    const [nt, nq, ns] = decomposeColMatrix(M);
+                    nodes[gi].translation = nt
+                    nodes[gi].rotation = nq
+                    nodes[gi].scale = ns
+
+                }
+            }else{
+                const parentGi = nodeIndices[node.parentId]
+                console.log("parentGi ", node.parentId)
+
+                nodes[parentGi].children.push(gi)
+
+            }
+        }
+        const rootNodeIndices = roots.map(i => nodeIndices[i]);
+        scenes[0].nodes = rootNodeIndices /*{ nodes: [sceneRootIndex] }*/
+    }
+
+    const meshes = [];
+    const skins = [];
+    const bufferViews = [];
+    const accessors = [];
+    const combinedBuffers = [];
+    let currentByteOffset = 0;
+
+    function padBufferTo4Bytes(buffer) {
+        const padding = (4 - (buffer.length % 4)) % 4;
+        return padding === 0 ? buffer : Buffer.concat([buffer, Buffer.alloc(padding)]);
+    }
+    
+   /* const sceneRootIndex = nodes.length;
+    nodes.push({ name: "Scene_Root", children: [] });
+
+    exportObjArray.forEach((exportObj, objIndex) => {
+        const verticesList = exportObj.vertex || [];
+        const facesList = exportObj.faces || [];
+        const bonesList = exportObj.bones || [];
+        const uvList = exportObj.uv || [];
+        const normalsList = exportObj.normals || [];
+        const materialsIdList = exportObj.materialsId || [];
+        const idxPos = exportObj.idxPos || [];
+        const idxUv = exportObj.idxUv || [];
+        const idxNormals = exportObj.idxNormals || [];
+        console.log("faceListLenght: ", facesList.length, facesList)
+        const vertCache = new Map();
+
+        const positions = [];
+        const uvs = [];
+        const normals = [];
+        const origPosIdx = [];
+
+        function getVertex(pi, ui, ni) {
+            const key = `${pi},${ui},${ni}`;
+
+            if (vertCache.has(key)) {
+                return vertCache.get(key);
+            }
+
+            const v = positions.length;
+            vertCache.set(key, v);
+
+            const pos = pi < mesh.positions.length
+                ? mesh.positions[pi]
+                : [0, 0, 0];
+
+            positions.push([
+                pos[0] * scale,
+                pos[1] * scale,
+                pos[2] * scale
+            ]);
+
+            const uv = ui < mesh.uvs.length
+                ? mesh.uvs[ui]
+                : [0, 0];
+
+            uvs.push([...uv]);
+
+            const normal = ni < mesh.normals.length
+                ? mesh.normals[ni]
+                : [0, 0, 1];
+
+            normals.push([...normal]);
+
+            origPosIdx.push(pi);
+
+            return v;
+        }
+
+        for(let i = 0; i < facesList.length; i++){
+            const matId = materialsIdList[i]
+            
+            const faceArr = facesList[i]
+            const uvIdxArr = idxUv[i]
+            const normalsIdxArr = idxNormals[i]
+
+            const faceA = getVertex(faceArr[0], faceArr[1], faceArr[2])
+            const uvB = getVertex(uvIdxArr[0], uvIdxArr[1], uvIdxArr[2])
+            const normalsC = getVertex(normalsIdxArr[0], normalsIdxArr[1], normalsIdxArr[2])
+            console.log("faceA, uvB, normalsC: ", faceA, uvB, normalsC)
+        }
+        
+    });
+
+    if (combinedBuffers.length === 0) {
+        console.log(`❌ No se encontraron datos válidos para exportar.`);
+        return;
+    }
+    const totalBinaryBuffer = Buffer.concat(combinedBuffers);*/
+    const gltf = {
+        asset: { version: "2.0", generator: "Torrente True Stream Indices Exporter" },
+        scenes: scenes,
+        nodes: nodes,
+        //meshes: meshes,
+        //skins: skins,
+        //buffers: [{ uri: `data:application/octet-stream;base64,${totalBinaryBuffer.toString('base64')}`, byteLength: totalBinaryBuffer.length }],
+        //bufferViews: bufferViews,
+        //accessors: accessors
+    };
+
+    const outputFilePath = process.argv[2] 
+        ? process.argv[2].replace(/\.nfo$/i, '.gltf').replace(/\.NFO$/i, '.gltf') 
+        : './nfos/Modelo_TrueStreamIndices.gltf';
+
+    fs.writeFileSync(outputFilePath, JSON.stringify(gltf, null, 2));
+    console.log(`🎉 ¡Exportación conectando los índices reales de ` + outputFilePath);
+}
+
+module.exports = { exportXYZBufferToGlft };
 // ============================================================================
 // TRADUCCIÓN LITERAL DE sub_100441F0 (Procesador de MSH1)
 // ============================================================================
@@ -625,9 +1901,10 @@ function sub_100441F0(meshBuffer, a2) {
     }
 
     // 3. sub_10043F10(Buffer, a2: (vtFFChunk *)v25);
-    sub_10043F10(meshBuffer, v25);
+    const model = sub_10043F10(meshBuffer, v25);
     
     // 4. v4 = *((_DWORD *)Buffer + 7);
+
     const v4 = meshBuffer[7] || 0;
     if (v4 !== 0) {
         // *((_DWORD *)Buffer + 23) = malloc(Size: 4 * v4);
@@ -667,6 +1944,8 @@ function sub_100441F0(meshBuffer, a2) {
     let v22 = 0;  // Copia contador STP1/STP2
 
     // 7. while ( vtFFChunk::Next(this: (vtFFChunk *)v25) != 0 )
+    const hullTris = []
+    const skinGroups = []
     if (v25.next() !== 0) {
         let v24 = 0; // Índice ZMR1 (Offset de bytes simulado en array)
         let v21 = 0; // Índice ZTR1 (Offset de bytes simulado en array)
@@ -702,35 +1981,50 @@ function sub_100441F0(meshBuffer, a2) {
                 const v14 = meshBuffer[24][v20];
 
                 // vtFFChunk::Read(this: (vtFFChunk *)v25, Buffer: v14, ElementSize: 4u);
-                v14.val0 = v25.streamPtr.readAbsolute(v25.dataPos, 4).readUInt32LE(0);
+                v14.boneIndex = v25.streamPtr.readAbsolute(v25.dataPos, 4).readUInt32LE(0);
                 v25.dataPos += 4;
-
+                
                 // vtFFChunk::Read(this: (vtFFChunk *)v25, Buffer: v14 + 1, ElementSize: 4u);
-                v14.val1_count = v25.streamPtr.readAbsolute(v25.dataPos, 4).readUInt32LE(0);
+                v14.vertCount = v25.streamPtr.readAbsolute(v25.dataPos, 4).readUInt32LE(0);
                 v25.dataPos += 4;
 
                 // v16 = malloc(Size: 4 * v14[1]);
                 // v14[2] = v16;
                 // vtFFChunk::Read(this: (vtFFChunk *)v25, Buffer: v16, ElementSize: v18);
-                const bytesToRead = 4 * v14.val1_count;
+                const bytesToRead = 4 * v14.vertCount;
                 v14.val2_ptr = v25.streamPtr.readAbsolute(v25.dataPos, bytesToRead);
+                let vertex = []
+                for(let i = 0; i < v14.val2_ptr.length / 4; i++){
+                    vertex.push(v14.val2_ptr.readInt32LE(i * 4))
+                }
+                
                 v25.dataPos += bytesToRead;
 
                 // vtFFChunk::Read(this: (vtFFChunk *)v25, Buffer: v14 + 3, ElementSize: 4u);
-                v14.val3 = v25.streamPtr.readAbsolute(v25.dataPos, 4).readUInt32LE(0);
+                v14.hasWeight = v25.streamPtr.readAbsolute(v25.dataPos, 4).readUInt32LE(0);
+                
                 v25.dataPos += 4;
-
+                const weight = []
                 // if ( v14[3] != 0 )
-                if (v14.val3 !== 0) {
+                if (v14.hasWeight !== 0) {
                     // v17 = malloc(Size: 4 * *v15); // NOTA: *v15 es v14[1] en la estructura original
                     // v14[4] = v17;
                     // vtFFChunk::Read(this: (vtFFChunk *)v25, Buffer: v17, ElementSize: v19);
-                    const extraBytes = 4 * v14.val1_count;
+                    const extraBytes = 4 * v14.vertCount;
                     v14.val4_ptr = v25.streamPtr.readAbsolute(v25.dataPos, extraBytes);
+                    
+                    for(let i = 0; i < v14.val4_ptr.length / 4; i++){
+                        weight.push(v14.val4_ptr.readFloatLE(i * 4))
+                    }
+                    console.log("v14.weight: ",weight)
                     v25.dataPos += extraBytes;
                 } else {
                     v14.val4_ptr = null;
                 }
+                skinGroups.push({boneIdx: v14.boneIndex, vertWeightArr: vertex.map((vertexIndex, i) => [
+                    vertexIndex,
+                    weight[i]
+                ])})
 
                 v3 = v22;
                 v9 = v23;
@@ -750,6 +2044,7 @@ function sub_100441F0(meshBuffer, a2) {
             }
 
         } while (v25.next() !== 0);
+
     }
 
     // 8. if ( v3 != *((_DWORD *)Buffer + 7) || v20 != *((_DWORD *)Buffer + 8) || v9 != *((_DWORD *)Buffer + 9) )
@@ -758,4 +2053,113 @@ function sub_100441F0(meshBuffer, a2) {
     }
 
     console.log(`[MSH1] Chunk procesado con éxito.`);
+    return { skinGroups: skinGroups}
 }
+// ==================================================
+// TRADUCCIÓN DEL BUCLE RAÍZ: vtNFO_NFO::Read
+// ==================================================
+const inputFile = process.argv[2] ? `${process.argv[2]}` : './nfos/Cuchillo.NFO';
+const fileBuffer = fs.readFileSync(inputFile);
+
+const vtffStream = new VtStream(fileBuffer.length, fileBuffer);
+
+// Este objeto simula el parámetro "a2" original de C++ que se le pasa a vtNFO_NFO::Read.
+// Representa el archivo físico completo y su inicio en 0.
+const fileContainer = {
+    streamPtr: vtffStream,
+    headerPos: 0,
+    chunkSize: fileBuffer.length // Crucial para que start_pos_new_chunk no se vuelva NaN
+};
+// if ( *(_DWORD *)a2->chunk_id != *(_DWORD *)aVtff )
+const magicStr = vtffStream.readAbsolute(fileContainer.headerPos, 4).toString('ascii');
+if (magicStr !== 'VTFF') {
+    throw new Error("El archivo no es un VTFF válido (Firma errónea).");
+}
+
+// vtFFChunk::vtFFChunk(this: &v50, a2);
+const v50 = new VtFFChunk(fileContainer);
+
+// if ( *(_DWORD *)v50.chunk_id != *(_DWORD *)aInfo )
+if (v50.chunkId !== 'INFO') {
+    throw new Error(`CHUNK no esperado: ${v50.chunkId}`);
+}
+
+console.log("¡Cabecera INFO y VTFF verificadas correctamente!");
+const exportsTemp = {
+    obj1: []
+}
+// while ( vtFFChunk::Next(this: &v50) != 0 )
+while (v50.next() !== 0) {
+    console.log(`[RAÍZ] Identificado Chunk: ${v50.chunkId} | Tamaño reservado: ${v50.chunkSize} bytes`);
+    
+    if (v50.chunkId === 'OBJ1') {
+        console.log(">>> Entrando a sub_10043040(v50) ...");
+        const obj1Response = sub_10043040(v50)
+        exportsTemp.obj1.push(obj1Response)
+        // Aquí llamarás a tu implementación de sub_10043040 pasando 'v50'
+    }else if(v50.chunkId === 'CPY1'){
+        // Asegúrate de que exportObj.cpys o una lista equivalente esté inicializada
+        if (!exportObj.cpys) exportObj.cpys = [];
+
+        // Equivalente a: vtFFChunk::vtFFChunk(this: &v53, a2: &v50);
+        const v53 = new VtFFChunk(v29); // v29 es el chunk actual (padre, ej: CPY1)
+
+        // Validación de la cabecera INFO
+        if (v53.chunkId !== 'INFO') {
+            throw new Error(`[Excepción 1037] CHUNK INFO NO ENCONTRADO EN CPY1`);
+        }
+
+        // 1. Leer los 64 bytes (0x40u) de la matriz de transformación
+        const cpyMatrixData = v53.streamPtr.readAbsolute(v53.dataPos, 0x40);
+        v53.dataPos += 0x40;
+
+        // 2. Buscar si hay un bloque CSTR anidado con el nombre (igual que *((_DWORD *)v8 + 16))
+        let cpyName = null;
+        if (v53.findFirst('CSTR') === 1) { // o findNext según aplique en tu implementación de chunks
+            const cstrSize = v53.chunkSize - 8;
+            const nameBuffer = v53.streamPtr.readAbsolute(v53.dataPos, cstrSize);
+            cpyName = nameBuffer.toString('ascii');
+        }
+        console.log("cpyName: ", cpyName)
+        // 3. Almacenar el elemento procesado en tu objeto de exportación (equivalente al array dinámico de 80 bytes)
+        exportObj.cpys.push({
+            name: cpyName ? cpyName.replace(/\0/g, '').trim() : `CPY_${exportObj.cpys.length}`,
+            matrix: cpyMatrixData
+        });
+
+        console.log(`[OBJ1] SubProcesando CPY1 #${exportObj.cpys.length - 1} | Nombre: ${cpyName ? cpyName.replace(/\0/g, '') : 'Sin nombre'}`);
+    }
+
+}
+function diagnosticarEsqueleto(bonesList) {
+    console.log("\n====== DIAGNÓSTICO DE LA JERARQUÍA DE HUESOS ======");
+    console.log(`Total de huesos leídos: ${bonesList.length}\n`);
+
+    bonesList.forEach((bone, index) => {
+        let name = bone.nameBone ? bone.nameBone.replace(/\0/g, '').trim() : `Hueso_${index}`;
+        let pId = bone.parentId;
+
+        // Extraer traslación (Posición X, Y, Z local)
+        let posX = 0, posY = 0, posZ = 0;
+        if (bone.matrix && Buffer.isBuffer(bone.matrix) && bone.matrix.length >= 64) {
+            posX = bone.matrix.readFloatLE(48).toFixed(4); // Offset 12 * 4
+            posY = bone.matrix.readFloatLE(52).toFixed(4); // Offset 13 * 4
+            posZ = bone.matrix.readFloatLE(56).toFixed(4); // Offset 14 * 4
+            
+        }
+
+        let relacion = "";
+        if (pId === undefined || pId === -1 || pId === 0xFFFFFFFF) {
+            relacion = "-> [RAÍZ PRINCIPAL] (Cuelga de la escena)";
+        } else if (pId >= 0 && pId < bonesList.length) {
+            let parentName = bonesList[pId].nameBone ? bonesList[pId].nameBone.replace(/\0/g, '').trim() : `Hueso_${pId}`;
+            relacion = `-> [HIJO DE] Hueso #${pId} ("${parentName}")`;
+        } else {
+            relacion = `-> ⚠️ [PARENT ID CORRUPTO / FUERA DE RANGO: ${pId}]`;
+        }
+
+        console.log(`Hueso #${index} ["${name}"] | Posición Local: (${posX}, ${posY}, ${posZ}) ${relacion}`);
+    });
+    console.log("====================================================\n");
+}
+exportXYZBufferToGlft(exportsArr, exportsTemp)
