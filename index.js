@@ -240,7 +240,59 @@ class VtFFChunk {
     }
 }
 
-
+function parseMaterials(v29){
+    console.log("v29: ", v29)
+    
+    const cstr = new VtFFChunk(v29)
+    // 2. Validación: if ( v30 != *(_DWORD *)aInfo )
+    if (cstr.chunkId !== 'CSTR') {
+        throw new Error(`CHUNK no esperado: ${v29.chunkId}`);
+    }
+    const buffName = cstr.streamPtr.readAbsolute(cstr.dataPos, cstr.chunkSize - 8);
+    const name = buffName.toString('ascii')
+    let texture
+    cstr.dataPos += cstr.chunkSize - 8;
+    if(!cstr.findFirst('INFO')){
+        throw new Error(`CHUNK no esperado: ${v29.chunkId}`);
+    }
+    console.log("cstr: ", cstr)
+    const buf = cstr.streamPtr.readAbsolute(cstr.dataPos, 4);
+    cstr.dataPos += 4
+    const buf1 = cstr.streamPtr.readAbsolute(cstr.dataPos, 4);
+    cstr.dataPos += 4
+    const buf2 = cstr.streamPtr.readAbsolute(cstr.dataPos, 4);
+    cstr.dataPos += 4
+    const buf3 = cstr.streamPtr.readAbsolute(cstr.dataPos, 4);
+    cstr.dataPos += 4
+    const buf4 = cstr.streamPtr.readAbsolute(cstr.dataPos, 4);
+    cstr.dataPos += 4
+    const buf5 = cstr.streamPtr.readAbsolute(cstr.dataPos, 4);
+    cstr.dataPos += 4
+    const buf6 = cstr.streamPtr.readAbsolute(cstr.dataPos, 4);
+    cstr.dataPos += 4
+    let i = 0;
+    while(i  < buf6.readInt32LE()){
+        console.log('follow: ', i)
+        
+        if(cstr.next() == 0){
+            break;
+        }
+        if(cstr.chunkId === 'CSTR'){
+            console.log('follow2: ', cstr.chunkId)
+            const bufNameMaterial = cstr.streamPtr.readAbsolute(cstr.dataPos, cstr.chunkSize-8)
+            cstr.dataPos += cstr.chunkSize-8
+            console.log('bufNameMaterial: ', bufNameMaterial.toString('ascii'))
+            texture = bufNameMaterial.toString('ascii')
+            i++
+        }
+        
+    }
+    const diffuse = [255, 255, 255, 255];
+    const shininess = 0.0
+    const secondary = diffuse
+    const tertiary = diffuse
+    return {texture, name, shininess, secondaryRgba: secondary, tertiaryRgba: tertiary, diffuseRgba: diffuse }
+}
 // ============================================================================
 // TRADUCCIÓN LITERAL DE sub_10043040 (OBJ1) EN NODE.JS
 // ============================================================================
@@ -285,6 +337,7 @@ function sub_10043040(chunkParent) {
     // 5. if ( vtFFChunk::Next(v29) != 0 ) do { ... } while ( vtFFChunk::Next(v29) != 0 );
     const lodsArr = []
     const bonesArr = []
+    const materials = []
     while (v29.next() !== 0) {
         const chunkId = v29.chunkId;
 
@@ -295,8 +348,8 @@ function sub_10043040(chunkParent) {
         else if (chunkId === 'MTR1') {
             console.log(`[OBJ1] SubProcesando MTR1 #${v27}`);
             if (v27 < mtrCount) {
-                console.log(`[OBJ1] SubProcesando MTR1 #${v27}`);
                 // sub_100439D0(...)
+                materials.push(parseMaterials(v29))
                 v27++;
             }
         } 
@@ -432,7 +485,13 @@ function sub_10043040(chunkParent) {
                 lodIndex: i,
                 nodeIdx: lodsArr[i][x].nodeIdx,
                 positions: lodsArr[i][x].positions,
-                skinGroups: lodsArr[i][x].skinGroups
+                skinGroups: lodsArr[i][x].skinGroups,
+                idxPos: lodsArr[i][x].idxPos,
+                materialsId: lodsArr[i][x].materialsId,
+                idxUv: lodsArr[i][x].idxUv,
+                idxNormal: lodsArr[i][x].idxNormal,
+                uvs: lodsArr[i][x].uvs,
+                normals: lodsArr[i][x].normals,
             }
             console.log("mesh.nodeIdx: ", mesh.nodeIdx)
             if (mesh.nodeIdx < bonesArr.length){
@@ -447,7 +506,7 @@ function sub_10043040(chunkParent) {
         }
 
     }
-    return {meshes: meshes, bonesArr: bonesArr, materialCount: materialCount, boneCount: boneCount, meshCount: meshCount}
+    return {meshes: meshes, bonesArr: bonesArr, materialCount: materialCount, boneCount: boneCount, meshCount: meshCount, materials: materials}
 }
 
 // ============================================================================
@@ -626,6 +685,7 @@ function sub_10043D80(a2, Str2 = 'STP1', idx) {
             console.log(`[LOD1 -> MSH1] Fragmento extraído: ${v10.chunkId}, iteración: ${v7}. Llamando a sub_100441F0...`);
             const subTemp = sub_100441F0(mockMeshBuffers, v10); // Llamada a la función que extrae los vértices finales
             exportObj.skinGroups = subTemp.skinGroups
+            exportObj.materialsId = subTemp.materialsId
             exportsArr.push(exportObj)
             result.push(exportObj)
             exportObj={
@@ -697,14 +757,14 @@ function sub_10043F10(meshBuffer, a2) {
     if (size4 > 0) {
         meshBuffer[11] = a2.streamPtr.readAbsolute(a2.dataPos, size4);
         if (!exportObj.stream2) exportObj.stream2 = [];
-        if (!exportObj.uv) exportObj.uv = [];
+        if (!exportObj.uvs) exportObj.uvs = [];
         exportObj.stream2.push(meshBuffer[11]);
         console.log('meshBuffer[11]  UVs):  ', meshBuffer[11])
         let row = []
         for (let i = 0; i < meshBuffer[11].length / 4; i++) {
             row.push(meshBuffer[11].readFloatLE(i * 4));
             if(row.length >= 2){
-                exportObj.uv.push(row)
+                exportObj.uvs.push(row)
                 row = []
             }
             
@@ -760,9 +820,14 @@ function sub_10043F10(meshBuffer, a2) {
         meshBuffer[14] = a2.streamPtr.readAbsolute(a2.dataPos, size6_2);
         let row = []
         for (let i = 0; i < meshBuffer[14].length / 4; i++) {
+            if(!exportObj.idxPos){
+                exportObj.idxPos = [];
+            }
             row.push(meshBuffer[14].readInt32LE(i * 4));
+
             if(row.length >= 3){
                 exportObj.faces.push(row)
+                exportObj.idxPos.push(row)
                 row = []
             }
             
@@ -802,14 +867,14 @@ function sub_10043F10(meshBuffer, a2) {
     if (size6_4 > 0) {
         meshBuffer[16] = a2.streamPtr.readAbsolute(a2.dataPos, size6_4);
         console.log("meshBuffer[16]: ", meshBuffer[16])
-        if(!exportObj.idxNormals){
-            exportObj.idxNormals = []
+        if(!exportObj.idxNormal){
+            exportObj.idxNormal = []
         }
         let row = []
         for (let i = 0; i < meshBuffer[16].length / 4; i++) {
             row.push(meshBuffer[16].readInt32LE(i * 4));
             if(row.length >= 3){
-                exportObj.idxNormals.push(row)
+                exportObj.idxNormal.push(row)
                 row = []
             }
             
@@ -1692,21 +1757,499 @@ function decomposeColMatrix(M) {
 
     return [t, q, scale];
 }
+function addAccessorMat4(arr4x4List) {
+    // Equivalente a:
+    // np.asarray(..., dtype=np.float32).reshape(-1, 16)
+
+    const arr = new Float32Array(
+        arr4x4List.flatMap(m => Array.from(m))
+    );
+
+    // Equivalente a arr.tobytes()
+    const bv = this._addView(
+        Buffer.from(arr.buffer)
+    );
+
+    const acc = {
+        bufferView: bv,
+        componentType: 5126, // G.FLOAT
+        count: arr.length / 16,
+        type: "MAT4"
+    };
+
+    this.g.accessors.push(acc);
+
+    return this.g.accessors.length - 1;
+}
+
+
+
 function exportXYZBufferToGlft(exportObjArray, exports) {
-    console.log("exports", exports)
     const axisFix = AXIS_MATRICES[`none`]
     const obj1Arr = exports.obj1 || []
     const nodes = [];
-    const scenes = [{nodes: []}]//{ nodes: [sceneRootIndex] }],  
+    const scenes = [{nodes: []}]//{ nodes: [sceneRootIndex] }],
+    const accessors = [];
+    const bufferViews = [];
+    let combinedArrBuffer = [];
+    const skins = [];
+    const meshes = [];
+    const materials = []
+    const materialsIdx = []
+    function addAccessorF2(arr, target = null) {
+        const data = new Float32Array(
+            arr.flatMap(v => Array.from(v))
+        );
+
+        const bv = _addView(
+            Buffer.from(data.buffer),
+            target
+        );
+
+        const acc = {
+            bufferView: bv,
+            componentType: 5126, // G.FLOAT
+            count: data.length / 2,
+            type: "VEC2"
+        };
+
+        accessors.push(acc);
+
+        return accessors.length - 1;
+    }
+    function addAccessorF3(arr, target = null, minmax = false) {
+        // np.asarray(arr, dtype=np.float32).reshape(-1, 3)
+        const data = new Float32Array(
+            arr.flatMap(v => Array.from(v))
+        );
+
+        const bv = _addView(
+            Buffer.from(data.buffer),
+            target
+        );
+
+        const acc = {
+            bufferView: bv,
+            componentType: 5126, // G.FLOAT
+            count: data.length / 3,
+            type: "VEC3"
+        };
+
+        if (minmax && data.length > 0) {
+            const min = [Infinity, Infinity, Infinity];
+            const max = [-Infinity, -Infinity, -Infinity];
+
+            for (let i = 0; i < data.length; i += 3) {
+                for (let j = 0; j < 3; j++) {
+                    if (data[i + j] < min[j]) {
+                        min[j] = data[i + j];
+                    }
+
+                    if (data[i + j] > max[j]) {
+                        max[j] = data[i + j];
+                    }
+                }
+            }
+
+            acc.min = min;
+            acc.max = max;
+        }
+
+        accessors.push(acc);
+
+        return accessors.length - 1;
+    }
+    function _singleJointSkinGroup(mesh, model) {
+        let boneIdx = 0;
+
+        if (
+            mesh.nodeIdx >= 0 &&
+            mesh.nodeIdx < model.bonesArr.length
+        ) {
+            const parent = model.bonesArr[mesh.nodeIdx].parentId;
+
+            if (
+                parent >= 0 &&
+                parent < model.boneCount
+            ) {
+                boneIdx = parent;
+            }
+        }
+
+        return [
+            {
+                boneIdx,
+                vertWeightArr: Array.from(
+                    { length: mesh.positions.length },
+                    (_, pi) => [pi, 1.0]
+                )
+            }
+        ];
+    }
+    function addAccessorJoints4(arr) {
+        const data = new Uint16Array(
+            arr.flatMap(v => Array.from(v))
+        );
+
+        const bv = _addView(
+            Buffer.from(data.buffer)
+        );
+
+        const acc = {
+            bufferView: bv,
+            componentType: 5123, // G.UNSIGNED_SHORT
+            count: data.length / 4,
+            type: "VEC4"
+        };
+
+        accessors.push(acc);
+
+        return accessors.length - 1;
+    }
+    function addAccessorIndices(arr) {
+        const data = new Uint32Array(arr);
+
+        const bv = _addView(
+            Buffer.from(data.buffer),
+            34963 // G.ELEMENT_ARRAY_BUFFER
+        );
+
+        const acc = {
+            bufferView: bv,
+            componentType: 5125, // G.UNSIGNED_INT
+            count: data.length,
+            type: "SCALAR"
+        };
+
+        accessors.push(acc);
+
+        return accessors.length - 1;
+    }
+    function addAccessorF4(arr) {
+        const data = new Float32Array(
+            arr.flatMap(v => Array.from(v))
+        );
+
+        const bv = _addView(
+            Buffer.from(data.buffer)
+        );
+
+        const acc = {
+            bufferView: bv,
+            componentType: 5126, // G.FLOAT
+            count: data.length / 4,
+            type: "VEC4"
+        };
+
+        accessors.push(acc);
+
+        return accessors.length - 1;
+    }
+    function buildMeshNode(mesh, model, nodeIndices, materialIndices, skinIndex, boneCount, heridasMatIdx, scale = 1){
+        const vertCache = new Map();
+
+        const positions = [];
+        const uvs = [];
+        const normals = [];
+        const origPosIdx = [];
+        function getVertex(pi, ui, ni) {
+            const key = `${pi},${ui},${ni}`;
+
+            const v = vertCache.get(key);
+
+            if (v !== undefined) {
+                return v;
+            }
+
+            const newV = positions.length;
+
+            vertCache.set(key, newV);
+
+            const pos =
+                pi < mesh.positions.length
+                    ? mesh.positions[pi]
+                    : [0, 0, 0];
+
+            positions.push([
+                pos[0] * scale,
+                pos[1] * scale,
+                pos[2] * scale
+            ]);
+
+            uvs.push(
+                ui < mesh.uvs.length
+                    ? mesh.uvs[ui]
+                    : [0, 0]
+            );
+
+            normals.push(
+                ni < mesh.normals.length
+                    ? mesh.normals[ni]
+                    : [0, 0, 1]
+            );
+
+            origPosIdx.push(pi);
+
+            return newV;
+        }
+        const isHerida = mesh.name.toLowerCase().includes("herida");
+
+        const byMat = new Map();
+        console.log("mesh: ", mesh.idxPos)
+        for (let f = 0; f < mesh.idxPos.length; f++) {
+            const matId =
+                f < mesh.materialsId.length
+                    ? mesh.materialsId[f]
+                    : 0;
+
+            const [pa, pb, pc] = mesh.idxPos[f];
+            const [ua, ub, uc] = mesh.idxUv[f];
+            const [na, nb, nc] = mesh.idxNormal[f];
+
+            const va = getVertex(pa, ua, na);
+            const vb = getVertex(pb, ub, nb);
+            const vc = getVertex(pc, uc, nc);
+
+            // winding flipped (source engine's front-face winding is opposite
+            // glTF's CCW-front convention -- confirmed backwards in Blender)
+            if (!byMat.has(matId)) {
+                byMat.set(matId, []);
+            }
+
+            byMat.get(matId).push([va, vc, vb]);
+        }
+
+        if (positions.length === 0) {
+            return;
+        }
+        const uvsFlipped = uvs.map(([u, v]) => [
+            u,
+            1.0 - v
+        ]);
+        const posAcc = addAccessorF3(
+            positions,
+            34962, // G.ARRAY_BUFFER
+            true
+        );
+
+        const nrmAcc = addAccessorF3(
+            normals,
+            34962, // G.ARRAY_BUFFER
+        );
+
+        const uvAcc = addAccessorF2(
+            uvsFlipped,
+            34962, // G.ARRAY_BUFFER
+        );
+        const attributes = {
+            POSITION: posAcc,
+            NORMAL: nrmAcc,
+            TEXCOORD_0: uvAcc
+        }
+        skinGroups = mesh.skinGroups && mesh.skinGroups.length > 0 ? mesh.skinGroups : _singleJointSkinGroup(mesh, model)
+        const perPosWeights = [];
+        
+        for (let i = 0; i < skinGroups.length; i++) {
+            const {boneIdx, vertWeightArr} = skinGroups[i]
+            console.log("boneIdx: ", boneIdx, "vertWeightArr[]: ", skinGroups[i])
+
+            for (let x = 0; x < vertWeightArr.length; x++) {
+                const [pi, w] = vertWeightArr[x]
+                if (!perPosWeights[pi]) {
+                    perPosWeights[pi] = [];
+                }
+
+                perPosWeights[pi].push([boneIdx, w]);
+            }
+        }
+
+        const joints4 = [];
+        const weights4 = [];
+
+        for (const pi of origPosIdx) {
+            let entries = perPosWeights[pi] ?? [];
+
+            entries = entries
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 4);
+
+            if (entries.length === 0) {
+                entries = [[0, 1.0]];
+            }
+
+            const js = [
+                ...entries.map(e => e[0]),
+                ...new Array(4 - entries.length).fill(0)
+            ];
+
+            const ws = [
+                ...entries.map(e => e[1]),
+                ...new Array(4 - entries.length).fill(0.0)
+            ];
+
+            const tot = ws.reduce((sum, w) => sum + w, 0) || 1.0;
+
+            const normalizedWs = ws.map(w => w / tot);
+
+            joints4.push(js.slice(0, 4));
+            weights4.push(normalizedWs.slice(0, 4));
+        }
+        attributes.JOINTS_0 = addAccessorJoints4(joints4)
+        attributes.WEIGHTS_0 = addAccessorF4(weights4)
+        const primitives = [];
+
+        for (const [matId, tris] of byMat) {
+            const idxFlat = tris.flatMap(tri => tri);
+
+            const idxAcc = addAccessorIndices(idxFlat);
+
+            let mi;
+
+            if (isHerida) {
+                mi = heridasMatIdx;
+            } else {
+                mi = matId < materialIndices.length
+                    ? materialIndices[matId]
+                    : materialIndices[0];
+            }
+            primitives.push({attributes: attributes, indices: idxAcc, material: mi, mode: 4})
+
+        }
+        const gmesh = {name: mesh.name, primitives: primitives}
+        const meshIdx = meshes.length
+        meshes.push(gmesh)
+        const meshNode = {
+            mesh: meshIdx,
+            //skin: skins.length,
+            name: mesh.name
+        };
+        const mnodeIdx = nodes.length
+        console.log("gmesh: ", gmesh.primitives[0])
+        console.log("meshNode: ", meshNode)
+        console.log("mnodeIdx: ", mnodeIdx)
+        nodes.push(meshNode)
+        scenes[0].nodes.push(mnodeIdx)
+    }
+    function _addView(data, target = null) {
+        const off = Buffer.from(data.buffer);
+        combinedArrBuffer.push(Buffer.from(data.buffer))
+        let byteOffset = 0;
+        for(let i = 0; i < combinedArrBuffer.length - 1; i++){
+            byteOffset+=combinedArrBuffer[i].length
+        }
+
+        const bv = {
+            buffer: 0,
+            byteOffset: byteOffset,
+            byteLength: off.length
+        };
+
+        if (target !== null) {
+            bv.target = target;
+        }
+        console.log("bv.target", bv.target)
+        bufferViews.push(bv);
+
+        return bufferViews.length - 1;
+    }
+    function addAccessorMat4(arr4x4List) {
+        // Equivalente a:
+        // np.asarray(..., dtype=np.float32).reshape(-1, 16)
+
+        const arr = new Float32Array(
+            arr4x4List.flatMap(m => Array.from(m))
+        );
+
+        // Equivalente a arr.tobytes()
+        const bv = _addView(
+            arr
+        );
+
+        const acc = {
+            bufferView: bv,
+            componentType: 5126, // G.FLOAT
+            count: arr.length / 16,
+            type: "MAT4"
+        };
+
+        accessors.push(acc);
+
+        return accessors.length - 1;
+    }
+    function getOrCreateMaterial(model, name, rgba, textureUri) {
+        // Buscar si ya existe
+        for (let i = 0; i < model.materials.length; i++) {
+            const entry = model.materials[i];
+
+            if (
+                entry.name === name &&
+                entry.textureUri === textureUri
+            ) {
+                return entry.index;
+            }
+        }
+
+        const baseColorFactor = [
+            rgba[0] / 255.0,
+            rgba[1] / 255.0,
+            rgba[2] / 255.0,
+            rgba.length > 3 ? rgba[3] / 255.0 : 1.0
+        ];
+
+        const pbr = {
+            baseColorFactor,
+            metallicFactor: 0.0,
+            roughnessFactor: 0.8
+        };
+
+        if (textureUri) {
+            const imgIdx = this.g.images.length;
+
+            this.g.images.push({
+                uri: textureUri
+            });
+
+            const texIdx = this.g.textures.length;
+
+            this.g.textures.push({
+                source: imgIdx
+            });
+
+            pbr.baseColorTexture = {
+                index: texIdx
+            };
+        }
+
+        const mat = {
+            name,
+            pbrMetallicRoughness: pbr,
+            alphaMode: "MASK",
+            alphaCutoff: 0.5,
+            doubleSided: true
+        };
+
+        const idx = materials.length;
+
+        materials.push(mat);
+
+        // Guardamos en array
+        materialsIdx.push({
+            name,
+            textureUri,
+            index: idx
+        });
+
+        return idx;
+    }
     for(let key in obj1Arr){
                                                                                                                                                                                      
         const model = obj1Arr[key]
         console.log("model", model.boneCount)
         const {localTranslations, localQuats, rAbsolute_2, fallbackBones} = computeBoneBindTransforms(model)
         const localTranslations2 = localTranslations.map(t => [
-            t[0] * 0.01, //scale
-            t[1] * 0.01, //scale
-            t[2] * 0.01  //scale
+            t[0] * 0.001, //scale
+            t[1] * 0.001, //scale
+            t[2] * 0.001  //scale
         ]);
         console.log("localTranslations2: ", localTranslations2)
         if(fallbackBones.length > 0){
@@ -1774,13 +2317,124 @@ function exportXYZBufferToGlft(exportObjArray, exports) {
         }
         const rootNodeIndices = roots.map(i => nodeIndices[i]);
         scenes[0].nodes = rootNodeIndices /*{ nodes: [sceneRootIndex] }*/
+
+        let world = new Array(model.boneCount).fill(null); 
+        function getWorld(i) {
+            if (world[i] !== null) {
+                return world[i];
+            }
+
+            const [t, q, s] = localTrs[i];
+
+            let M = trsToMatrix(t, q, s);
+            const identity4 = [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1]
+            ];
+            if (model.bonesArr[i].parentId === -1) {
+                if (!matricesAlmostEqual(axisFix, identity4)) {
+                    M = multiplyMat4(axisFix, M);
+                }
+
+                world[i] = M;
+            } else {
+                world[i] = multiplyMat4(
+                    getWorld(model.bonesArr[i].parentId),
+                    M
+                );
+            }
+
+            return world[i];
+        }
+        for(let i = 0; i < model.boneCount; i++ ){
+            getWorld(i)
+        }
+        let skinIndex = null
+        if(model.boneCount > 0){
+            const joints = nodeIndices.slice(0, model.boneCount);
+            const ibms = Array.from(
+                { length: model.boneCount },
+                (_, i) => {
+                    const M = getWorld(i);
+
+                    // Transpuesta
+                    const T = [
+                        [M[0][0], M[1][0], M[2][0], M[3][0]],
+                        [M[0][1], M[1][1], M[2][1], M[3][1]],
+                        [M[0][2], M[1][2], M[2][2], M[3][2]],
+                        [M[0][3], M[1][3], M[2][3], M[3][3]]
+                    ];
+
+                    // np.float32 + flatten()
+                    const flat = [
+                        T[0][0], T[0][1], T[0][2], T[0][3],
+                        T[1][0], T[1][1], T[1][2], T[1][3],
+                        T[2][0], T[2][1], T[2][2], T[2][3],
+                        T[3][0], T[3][1], T[3][2], T[3][3]
+                    ];
+
+                    return Array.from(new Float32Array(flat));
+                }
+            );
+            const acc = addAccessorMat4(ibms)
+            const skin = {
+                inverseBindMatrices: acc,
+                skeleton: rootNodeIndices.length > 0 ? rootNodeIndices[0] : null,
+                joints: joints
+            }
+            skins.push(skin)
+            skinIndex = skins.length - 1
+
+        }
+        console.log("skins: ", skins)
+        const materialIndices = [];
+        console.log("materialsId22: ", model)
+        for (const mat of model.materials) {
+            const uri = null
+
+            materialIndices.push(
+                getOrCreateMaterial(
+                    model,
+                    mat.name,
+                    mat.diffuseRgba,
+                    uri
+                )
+            );
+        }
+
+        if (materialIndices.length === 0) {
+            materialIndices.push(
+                getOrCreateMaterial(
+                    model,
+                    "default",
+                    [200, 200, 200, 255],
+                    null
+                )
+            );
+        }
+
+        const heridasUri = null
+            ? null
+            : null;
+
+        const heridasMatIdx = getOrCreateMaterial(
+            model,
+            "heridas",
+            [255, 255, 255, 255],
+            heridasUri
+        );
+
+        console.log("model.meshes.length", model.meshes.length)
+        for(let mesh of model.meshes){
+            buildMeshNode(mesh, model, nodeIndices, materialIndices, skinIndex, model.boneCount, null, 1)
+        }
     }
 
-    const meshes = [];
-    const skins = [];
-    const bufferViews = [];
-    const accessors = [];
-    const combinedBuffers = [];
+  
+
+
     let currentByteOffset = 0;
 
     function padBufferTo4Bytes(buffer) {
@@ -1864,17 +2518,19 @@ function exportXYZBufferToGlft(exportObjArray, exports) {
     if (combinedBuffers.length === 0) {
         console.log(`❌ No se encontraron datos válidos para exportar.`);
         return;
-    }
-    const totalBinaryBuffer = Buffer.concat(combinedBuffers);*/
+    }*/
+   const totalBinaryBuffer = Buffer.concat(combinedArrBuffer)
     const gltf = {
         asset: { version: "2.0", generator: "Torrente True Stream Indices Exporter" },
         scenes: scenes,
         nodes: nodes,
-        //meshes: meshes,
-        //skins: skins,
-        //buffers: [{ uri: `data:application/octet-stream;base64,${totalBinaryBuffer.toString('base64')}`, byteLength: totalBinaryBuffer.length }],
-        //bufferViews: bufferViews,
-        //accessors: accessors
+        "scene": 0,
+        meshes: meshes,
+        materials: materials,
+        skins: skins,
+        buffers: [{ uri: `data:application/octet-stream;base64,${totalBinaryBuffer.toString('base64')}`, byteLength: totalBinaryBuffer.length }],
+        bufferViews: bufferViews,
+        accessors: accessors
     };
 
     const outputFilePath = process.argv[2] 
@@ -2053,7 +2709,7 @@ function sub_100441F0(meshBuffer, a2) {
     }
 
     console.log(`[MSH1] Chunk procesado con éxito.`);
-    return { skinGroups: skinGroups}
+    return { skinGroups: skinGroups, materialsId: model.materialsId}
 }
 // ==================================================
 // TRADUCCIÓN DEL BUCLE RAÍZ: vtNFO_NFO::Read
