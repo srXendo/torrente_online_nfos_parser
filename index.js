@@ -986,7 +986,7 @@ function computeBoneRestPositions(model){
             const parent = model.bonesArr[i].parentId
             fallbackBones.push(i)
             console.log("[computeBoneRestPositions] parent:", parent)
-            if (parent < model.bone_count && resolved[parent] != null){
+            if (parent < model.boneCount && resolved[parent] != null){
                 resolved[i] = resolved[parent]
             }else{
                 resolved[i] = [0.0, 0.0, 0.0]
@@ -2261,19 +2261,19 @@ function exportXYZBufferToGlft(exportObjArray, exports) {
         const localTrs = new Array(model.boneCount).fill([]);
         for(let i = 0; i < model.boneCount; i++){
             const node = model.bonesArr[i];
-            const t = localTranslations[i];
+            const t = localTranslations2[i];
             const q = localQuats[i];
             const s = [1.0, 1.0, 1.0];
             localTrs[i] = [t, q, s]
             const gn = {
-                mesh: null,
-                skin: null,
+                
+                
                 rotation: q,
                 translation: t,
                 scale: s,
                 children: [],
-                matrix: null,
-                camera: null,
+                
+                
                 name: node.nameBone
             }
             const idx = nodes.length
@@ -2428,7 +2428,7 @@ function exportXYZBufferToGlft(exportObjArray, exports) {
 
         console.log("model.meshes.length", model.meshes.length)
         for(let mesh of model.meshes){
-            buildMeshNode(mesh, model, nodeIndices, materialIndices, skinIndex, model.boneCount, null, 1)
+            buildMeshNode(mesh, model, nodeIndices, materialIndices, skinIndex, model.boneCount, null, 0.001)
         }
     }
 
@@ -2521,14 +2521,15 @@ function exportXYZBufferToGlft(exportObjArray, exports) {
     }*/
    const totalBinaryBuffer = Buffer.concat(combinedArrBuffer)
     const gltf = {
+
         asset: { version: "2.0", generator: "Torrente True Stream Indices Exporter" },
         scenes: scenes,
-        nodes: nodes,
+        nodes: nodes, //revisar
         "scene": 0,
         meshes: meshes,
         materials: materials,
         skins: skins,
-        buffers: [{ uri: `data:application/octet-stream;base64,${totalBinaryBuffer.toString('base64')}`, byteLength: totalBinaryBuffer.length }],
+        buffers: [{ uri: `data:application/octet-stream;base64,${totalBinaryBuffer.toString('base64')}`, byteLength: totalBinaryBuffer.length }], //revisar
         bufferViews: bufferViews,
         accessors: accessors
     };
