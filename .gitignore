@@ -1,6 +1,5 @@
-nfos/*
-nfos
 keys/*
-keys
-log*
-package-lock.json
+nfos/*
+OUT/*
+__pycache__/*
+.vscode/*
