@@ -1,17 +1,20 @@
 # NFO/KEY → glTF converter
+## requeriments
+```
 
-Converts this ~2004 game's proprietary `.NFO` (models) and `.KEY`
-(skeletal animations) files into `.gltf` (+ `.bin`), ready to open in
-Blender with UVs, materials, skeleton, and animation already linked up.
+Python 3.13.7
+pip install pygltflib numpy
 
+```
 ## Usage
 
 ```
-pip install pygltflib numpy
+
+npm run start
+or
+python convert_all.py --only Torrente.NFO --models-dir nfos --keys-dir keys
+
 ```
-
-Put the script files next to three folders (as in your setup):
-
 ```
 convert_all.py
 nfo_parser.py
@@ -21,7 +24,7 @@ mathutil.py
 chunkfmt.py
 blender_organize.py
 models/     *.NFO
-keys/       *.KEY
+keys/       *.KEY (no soporta busqueda recursiva los .key tienen que estar en la raid keys/tol.key)
 textures/   *.PNG   (already-converted textures)
 ```
 
