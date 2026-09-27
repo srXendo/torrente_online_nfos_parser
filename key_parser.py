@@ -77,24 +77,6 @@ class KeyAnimation:
     # frames[f][bone_i] = (qx,qy,qz,qw, px,py,pz, sx,sy,sz)
     frames: list
 
-def parse_frame_data(frame_bytes, root_size):
-    bones_frame = []
-    chunk_size = 40  # 40 bytes por hueso
-    
-    for i in range(root_size):
-        offset = i * chunk_size
-        # Extraemos los 10 floats de golpe (< = little-endian, 10f = 10 floats de 4 bytes)
-        unpacked = struct.unpack_from("<10f", frame_bytes, offset)
-        
-        qx, qy, qz, qw, px, py, pz, sx, sy, sz = unpacked
-        
-        bones_frame.append({
-            "qx": qx, "qy": qy, "qz": qz, "qw": qw,
-            "px": px, "py": py, "pz": pz,
-            "sx": sx, "sy": sy, "sz": sz
-        })
-        
-    return bones_frame
 def parse_key(buf: bytes, name: str = '') -> KeyAnimation:
     reader: Reader = Reader(buf)
     magic_header = reader.read_bytes(4)

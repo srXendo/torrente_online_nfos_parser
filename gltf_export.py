@@ -571,39 +571,30 @@ def add_animation(b: GLTFBuilder, anim: KeyAnimation, model: NFOModel, node_indi
 
         trans, rots, scales = [], [], []
         for frame in anim.frames:
+            # 1. Leemos tal cual lo tienes en el archivo
             qx, qy, qz, qw, px, py, pz, sx, sy, sz = frame[bone_i]
-            frame_matrix = trs_to_matrix([px, py, pz], [qx, qy, qz, qw], [sx, sy, sz])
-            #q_key = np.array([q_bind[0], q_bind[1], q_bind[2], q_bind[3]])
-            # Cuaternión para 90 grados en el eje X (o prueba con Y/Z si el X no es el correcto)
 
-            #q_animated = q_key
-            root_transform = [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, -1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0]
-            ]
-            if(bone_i != 0 ):
-                root_transform = trs_to_matrix(b.g.nodes[target_node].translation, b.g.nodes[target_node].rotation, b.g.nodes[target_node].scale)
-            inverse_bone_matrix = invert_matrix_numpy(root_transform)
-            bone_transform = frame_matrix
-            matrix_result = matrix4x4_to_flat(multiply_matrices(inverse_bone_matrix, flat_to_matrix4x4(model.nodes[bone_i].matrix)))
-            bone_matrix_3d = flat_to_matrix4x4(model.nodes[bone_i].matrix)
-            t_local = np.array([b.g.nodes[target_node].translation[0], b.g.nodes[target_node].translation[1], b.g.nodes[target_node].translation[2]]) #b.g.nodes[target_node].translation
+            # 2. TU combinación matemática que mantiene los huesos intactos
+            t_final = [py * scale, px * scale, pz * scale]
+            q_final = [qz, qy, qw, qx]
 
-    
+            # 3. Identificar si es el Root (hueso padre principal)
+            is_root = (model.nodes[target_node].parent == -1)
 
-            trans.extend([py * scale, px * scale, pz * scale])
-            rots.extend([qz * scale, qy * scale, qw * scale, qx * scale])
+            # 4. Levantar el modelo SOLO desde el Root
+            if is_root:
+
+                q_fix = np.array([0.0, 0.0, 0.70710678, 0.70710678])
+            
+                
+                q_final_np = np.array(q_final)
+                q_rotated = quat_multiply(q_fix, q_final_np)
+                q_final = q_rotated.tolist()
+
+            # 5. Guardar en glTF
+            trans.extend(t_final)
+            rots.extend(q_final)
             scales.extend([sx, sy, sz])
-            # Scale is NOT animated: the decompiled bone-update code builds
-            # its rotation matrix straight from the quaternion alone
-            # (vtMatrix::vtMatrix(buffer, quatPtr), 4 floats, no scale
-            # input) -- KEY's scale field is never actually consumed for
-            # bone transforms, so we keep bind scale (1,1,1) static rather
-            # than animate it, instead of the earlier version's mistake of
-            # feeding KEY's scale straight into the scale channel.
-
         t_out = b.add_accessor_f3(trans)
         r_out = b.add_accessor_f4(rots)
         s_out = b.add_accessor_f3(scales)

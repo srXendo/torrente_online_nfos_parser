@@ -3,3 +3,4 @@ nfos/*
 OUT/*
 __pycache__/*
 .vscode/*
+textures/*
